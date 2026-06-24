@@ -4,7 +4,7 @@
   "description": "AWS Node.js backend API for The Independence Law Firm Client Portal",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
@@ -14,8 +14,24 @@
     "db:seed": "ts-node prisma/seed.ts",
     "lint": "tsc --noEmit"
   },
-  "keywords": ["independence-law", "backend", "api"],
+  "keywords": [
+    "independence-law",
+    "backend",
+    "api"
+  ],
   "author": "SteamWorks Digital",
   "license": "UNLICENSED",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.0.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^6.0.3"
+  }
 }
