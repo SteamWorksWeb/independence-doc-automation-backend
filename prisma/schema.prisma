@@ -1,0 +1,140 @@
+// =============================================================================
+// THE INDEPENDENCE LAW FIRM — PRISMA DATA VAULT
+// schema.prisma
+//
+// Architecture decisions:
+//
+//   1. ABSOLUTE DATA ISOLATION — No generic "User" table.
+//      Lawyers and Clients are distinct models with distinct auth flows,
+//      distinct credential columns, and distinct business logic.
+//      They cannot be confused at the database or application level.
+//
+//   2. UUID PRIMARY KEYS — All IDs use @default(uuid()).
+//      Sequential integers expose record counts and enable enumeration attacks.
+//      UUIDs are opaque and safe to include in URLs.
+//
+//   3. REFERENTIAL INTEGRITY — Every Client is assigned to exactly one Lawyer.
+//      Cascading behaviour is set to Restrict (no orphaned clients on lawyer
+//      deletion). The application layer must reassign clients before removing
+//      a lawyer account.
+//
+//   4. INDEXES — Added on all high-frequency query paths:
+//      - Email lookups (login, duplicate-check) on both models
+//      - lawyerId on Client (dashboard queries, case aggregations)
+//      - verificationToken on Client (token lookup during email verification)
+//
+//   5. SNAKE_CASE TABLE NAMES — @@map() ensures DB tables use Postgres
+//      convention ("lawyers", "clients") while Prisma models use PascalCase.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// STOP: Do NOT run `prisma migrate dev` without explicit approval.
+//       Review this schema first, then confirm before any migration.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Connection URL is configured in prisma.config.ts (Prisma 7 convention).
+  // Set DATABASE_URL in your .env file.
+}
+
+// =============================================================================
+// LAWYER
+//
+// The authenticated administrator/attorney.
+// Admin credentials live in environment variables (ADMIN_PASSWORD_HASH) for the
+// Next.js admin gateway. This model stores Lawyer identity for the backend API —
+// enabling future multi-lawyer support as the firm scales.
+//
+// One Lawyer → Many Clients (1:N)
+// =============================================================================
+
+model Lawyer {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+
+  // ── Credentials ────────────────────────────────────────────────────────────
+  // bcrypt hash (cost 12). NEVER store plain-text passwords.
+  passwordHash String
+
+  // ── Relations ──────────────────────────────────────────────────────────────
+  // A Lawyer supervises many Clients.
+  // onDelete: Restrict prevents accidental orphaning of Client records.
+  clients      Client[]
+
+  // ── Timestamps ─────────────────────────────────────────────────────────────
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  // Email index: fast login lookups + duplicate-registration checks.
+  @@index([email])
+
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("lawyers")
+}
+
+// =============================================================================
+// CLIENT
+//
+// A firm client who has registered for the secure portal.
+// Clients are ALWAYS associated with one Lawyer (lawyerId is required).
+// A Client cannot exist without an assigned Lawyer.
+//
+// The verification loop:
+//   1. Client registers → isVerified: false, verificationToken set
+//   2. Client clicks email link → token matched + expiry checked
+//   3. Backend sets isVerified: true, clears verificationToken + verificationExpires
+//   4. Client can now log in
+// =============================================================================
+
+model Client {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+
+  // ── Credentials ────────────────────────────────────────────────────────────
+  // bcrypt hash (cost 12). NEVER store plain-text passwords.
+  passwordHash String
+
+  // ── Verification state ─────────────────────────────────────────────────────
+  // isVerified: blocked from logging in until email is confirmed.
+  isVerified            Boolean   @default(false)
+
+  // verificationToken: HMAC-SHA256 hash of the UUID sent in the email link.
+  // The raw token travels ONLY in the email URL — never stored here.
+  // Null once verification is complete.
+  verificationToken     String?
+
+  // verificationExpires: UTC expiry of the verification token (default: +24h).
+  // Null once verification is complete.
+  verificationExpires   DateTime?
+
+  // ── Lawyer assignment ──────────────────────────────────────────────────────
+  // Every client must be assigned to a supervising lawyer.
+  lawyerId     String
+  lawyer       Lawyer   @relation(fields: [lawyerId], references: [id], onDelete: Restrict)
+
+  // ── Timestamps ─────────────────────────────────────────────────────────────
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  // Email: fast login lookups + duplicate-registration checks.
+  @@index([email])
+
+  // lawyerId: fast dashboard queries — "show all clients for lawyer X".
+  @@index([lawyerId])
+
+  // verificationToken: fast token lookup during email verification flow.
+  @@index([verificationToken])
+
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("clients")
+}

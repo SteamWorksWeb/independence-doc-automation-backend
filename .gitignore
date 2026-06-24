@@ -1,0 +1,27 @@
+# ── Build output ─────────────────────────────────────────────
+dist/
+
+# ── Dependencies ──────────────────────────────────────────────
+node_modules/
+
+# ── Environment secrets ───────────────────────────────────────
+.env
+.env.local
+.env.production
+
+# ── Prisma ───────────────────────────────────────────────────
+# Keep migrations in version control — DO NOT gitignore prisma/migrations
+# Only ignore the generated client (re-generated on deploy)
+prisma/generated/
+
+# ── OS / Editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/settings.json
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+/src/generated/prisma
