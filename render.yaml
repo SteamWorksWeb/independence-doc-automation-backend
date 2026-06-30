@@ -1,0 +1,51 @@
+# =============================================================================
+# THE INDEPENDENCE LAW FIRM — RENDER.COM INFRASTRUCTURE AS CODE
+# render.yaml
+#
+# Defines the web service that Render will build and deploy.
+# Sensitive values (DATABASE_URL, API_BEARER_TOKEN) must be set manually
+# in the Render dashboard or via a Render Secret Group — never committed here.
+# =============================================================================
+
+services:
+  - type: web
+    name: independence-law-backend
+    runtime: node
+    region: ohio          # us-east-2 — closest to AWS RDS us-east-2 if applicable; change as needed
+
+    # ── Build ────────────────────────────────────────────────────────────────
+    # 1. Install exact dependency versions from lockfile (ci = reproducible)
+    # 2. Generate the Prisma client for the target platform
+    # 3. Compile TypeScript → dist/
+    buildCommand: npm ci && npx prisma generate && npm run build
+
+    # ── Start ────────────────────────────────────────────────────────────────
+    # Runs the compiled output; matches package.json "start" script
+    startCommand: npm start
+
+    # ── Auto-deploy ──────────────────────────────────────────────────────────
+    autoDeploy: false     # Trigger deploys manually or via CI pipeline
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    # Express exposes GET /health → { status: "ok" }
+    healthCheckPath: /health
+
+    # ── Environment Variables ─────────────────────────────────────────────────
+    # Values are intentionally left blank here (IaC principle: declare shape,
+    # not secrets). Set the actual values in the Render dashboard or sync from
+    # a Secret Group.
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: PORT
+        value: 10000       # Render's default internal port for web services
+
+      - key: DATABASE_URL
+        sync: false        # Set in Render dashboard — AWS RDS connection string
+
+      - key: API_BEARER_TOKEN
+        sync: false        # Set in Render dashboard — shared secret for API auth
+
+      - key: CORS_ORIGINS
+        sync: false        # Set in Render dashboard — comma-separated allowed origins
