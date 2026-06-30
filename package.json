@@ -2,11 +2,11 @@
   "name": "independence-law-backend",
   "version": "1.0.0",
   "description": "AWS Node.js backend API for The Independence Law Firm Client Portal",
-  "main": "dist/index.js",
+  "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node dist/server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
