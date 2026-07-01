@@ -152,4 +152,59 @@ router.get(
   }
 );
 
+// =============================================================================
+// GET /api/v1/admin/clients/:id
+//
+// Returns the complete 360° profile for a single client, including every field
+// of their DOJ intake questionnaire (intakeProfile relation).
+//
+// Path param:
+//   :id — the client's UUID (from the roster table)
+//
+// Responses:
+//   200  { client: Client & { intakeProfile: IntakeProfile | null } }
+//         — Full client record. intakeProfile is null if the client has not
+//           yet begun the intake questionnaire.
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   404  { error: string }   — No client found for the given id
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.get(
+  '/clients/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      // String() cast: Express types params as string | string[]; Prisma
+      // where clause requires a plain string. The cast is safe because
+      // Express always resolves named route params to a single string value.
+      const clientId = String(req.params.id);
+
+      const client = await prisma.client.findUnique({
+        where: { id: clientId },
+        select: {
+          id:         true,
+          email:      true,
+          isVerified: true,
+          createdAt:  true,
+          // Include the full intakeProfile — every DOJ questionnaire field
+          // is returned so the frontend tabbed interface can display them
+          // without a second round-trip.
+          intakeProfile: true,
+        },
+      });
+
+      if (!client) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      res.status(200).json({ client });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
