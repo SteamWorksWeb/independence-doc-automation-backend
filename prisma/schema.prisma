@@ -54,9 +54,9 @@ datasource db {
 
 model Lawyer {
   // ── Identity ───────────────────────────────────────────────────────────────
-  id           String   @id @default(uuid())
-  name         String
-  email        String   @unique
+  id    String @id @default(uuid())
+  name  String
+  email String @unique
 
   // ── Credentials ────────────────────────────────────────────────────────────
   // bcrypt hash (cost 12). NEVER store plain-text passwords.
@@ -65,16 +65,15 @@ model Lawyer {
   // ── Relations ──────────────────────────────────────────────────────────────
   // A Lawyer supervises many Clients.
   // onDelete: Restrict prevents accidental orphaning of Client records.
-  clients      Client[]
+  clients Client[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // ── Indexes ────────────────────────────────────────────────────────────────
   // Email index: fast login lookups + duplicate-registration checks.
   @@index([email])
-
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("lawyers")
 }
@@ -95,9 +94,9 @@ model Lawyer {
 
 model Client {
   // ── Identity ───────────────────────────────────────────────────────────────
-  id           String   @id @default(uuid())
-  name         String
-  email        String   @unique
+  id    String @id @default(uuid())
+  name  String
+  email String @unique
 
   // ── Credentials ────────────────────────────────────────────────────────────
   // bcrypt hash (cost 12). NEVER store plain-text passwords.
@@ -105,36 +104,88 @@ model Client {
 
   // ── Verification state ─────────────────────────────────────────────────────
   // isVerified: blocked from logging in until email is confirmed.
-  isVerified            Boolean   @default(false)
+  isVerified Boolean @default(false)
 
   // verificationToken: HMAC-SHA256 hash of the UUID sent in the email link.
   // The raw token travels ONLY in the email URL — never stored here.
   // Null once verification is complete.
-  verificationToken     String?
+  verificationToken String?
 
   // verificationExpires: UTC expiry of the verification token (default: +24h).
   // Null once verification is complete.
-  verificationExpires   DateTime?
+  verificationExpires DateTime?
 
   // ── Lawyer assignment ──────────────────────────────────────────────────────
   // Every client must be assigned to a supervising lawyer.
-  lawyerId     String
-  lawyer       Lawyer   @relation(fields: [lawyerId], references: [id], onDelete: Restrict)
+  lawyerId String
+  lawyer   Lawyer @relation(fields: [lawyerId], references: [id], onDelete: Restrict)
+
+  // ── Intake profile (1-to-1) ────────────────────────────────────────────────
+  // Created when the client begins the onboarding flow.
+  // Null until the client starts intake.
+  intakeProfile IntakeProfile?
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // ── Indexes ────────────────────────────────────────────────────────────────
   // Email: fast login lookups + duplicate-registration checks.
   @@index([email])
-
   // lawyerId: fast dashboard queries — "show all clients for lawyer X".
   @@index([lawyerId])
-
   // verificationToken: fast token lookup during email verification flow.
   @@index([verificationToken])
-
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("clients")
+}
+
+// =============================================================================
+// INTAKE PROFILE
+//
+// A 1-to-1 extension of Client that stores student debt bankruptcy intake data.
+// Created when a client begins the onboarding flow; updated on every step save.
+// Supports partial saves — all fields are optional except the clientId FK.
+//
+// isCompleted: true signals the client has submitted the final intake step.
+//              The lawyer dashboard uses this flag to identify cases ready
+//              for review.
+//
+// onDelete: Cascade — intake data is automatically removed if the Client
+//           record is deleted. No orphaned intake rows.
+// =============================================================================
+
+model IntakeProfile {
+  id String @id @default(uuid())
+
+  // ── 1-to-1 link to Client ─────────────────────────────────────────────────
+  // @unique enforces the 1-to-1 constraint at the database level.
+  clientId String @unique
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // ── Contact ───────────────────────────────────────────────────────────────
+  phone   String?
+  address String?
+
+  // ── Financial profile ─────────────────────────────────────────────────────
+  employmentStatus String? // "employed" | "self-employed" | "unemployed" | "retired" | "other"
+  monthlyIncome    Float?
+  totalDebt        Float?
+  studentLoanDebt  Float?
+  loanTypes        String? // "Federal" | "Private" | "Both"
+
+  // ── Case narrative ────────────────────────────────────────────────────────
+  hardshipNotes String?
+
+  // ── Completion flag ───────────────────────────────────────────────────────
+  // Set to true when the client submits the final step of the intake form.
+  // Lawyers filter their dashboard on isCompleted: true to find ready cases.
+  isCompleted Boolean @default(false)
+
+  // ── Timestamps ────────────────────────────────────────────────────────────
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ── Table name ────────────────────────────────────────────────────────────
+  @@map("intake_profiles")
 }
