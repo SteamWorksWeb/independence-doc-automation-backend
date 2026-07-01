@@ -39,31 +39,69 @@ function getPrisma(): PrismaClient {
 
 const router = Router();
 
+// ── Intake payload type ───────────────────────────────────────────────────────
+interface IntakePayload {
+  // Personal & Household
+  dob?:           string;
+  ssn?:           string;
+  county?:        string;
+  phone?:         string;
+  address?:       string;
+  householdSize?: number;
+
+  // Health & Employment
+  hasDisability?:   boolean;
+  isEmployed?:      boolean;
+  unemployed5of10?: boolean;
+  monthlyIncome?:   number;
+
+  // Assets
+  housingStatus?:   string;
+  hasCar?:          boolean;
+  hasRetirement?:   boolean;
+  expectingRefund?: boolean;
+
+  // Monthly Expenses
+  expFood?:         number;
+  expHousekeeping?: number;
+  expApparel?:      number;
+  expPersonalCare?: number;
+  expHousing?:      number;
+  expUtilities?:    number;
+  expTransportGas?: number;
+  expCarInsurance?: number;
+
+  // Education & Debt
+  totalDebt?:       number;
+  studentLoanDebt?: number;
+  schoolsHistory?:  string;
+
+  // Case narrative
+  hardshipNotes?:   string;
+  unmetBasicNeeds?: string;
+
+  // Completion
+  isCompleted?: boolean;
+}
+
+// ── Helper: strip undefined fields for partial upsert ─────────────────────────
+function definedOnly(payload: IntakePayload): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, v]) => v !== undefined)
+  );
+}
+
 // =============================================================================
 // POST /api/v1/intake
 //
 // Creates or updates the IntakeProfile for the authenticated client.
-// Uses an upsert so the frontend can call this on every step save without
-// worrying about whether the profile already exists.
-//
-// Request body (all fields optional — partial save supported):
-//   {
-//     phone?:            string
-//     address?:          string
-//     employmentStatus?: string   — "employed" | "self-employed" | "unemployed" | "retired" | "other"
-//     monthlyIncome?:    number
-//     totalDebt?:        number
-//     studentLoanDebt?:  number
-//     loanTypes?:        string   — "Federal" | "Private" | "Both"
-//     hardshipNotes?:    string
-//     isCompleted?:      boolean  — true when the client submits the final step
-//   }
+// Uses an upsert — safe to call on every wizard step save.
 //
 // Responses:
-//   200  { intakeProfile }        — Upserted successfully
-//   400  { error: string }        — Validation error
-//   401  { error: 'Unauthorized'} — Missing or invalid client JWT
-//   500  { error: string }        — Unexpected server error
+//   200  { intakeProfile }         — Upserted successfully
+//   400  { error: string }         — Validation error
+//   401  { error: 'Unauthorized' } — Missing or invalid client JWT
+//   500  { error: string }         — Unexpected server error
 // =============================================================================
 
 router.post(
@@ -72,55 +110,33 @@ router.post(
   async (req: ExpressRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
       const clientId = (req as unknown as ClientRequest).clientId;
-
-      const {
-        phone,
-        address,
-        employmentStatus,
-        monthlyIncome,
-        totalDebt,
-        studentLoanDebt,
-        loanTypes,
-        hardshipNotes,
-        isCompleted,
-      } = req.body as {
-        phone?:            string;
-        address?:          string;
-        employmentStatus?: string;
-        monthlyIncome?:    number;
-        totalDebt?:        number;
-        studentLoanDebt?:  number;
-        loanTypes?:        string;
-        hardshipNotes?:    string;
-        isCompleted?:      boolean;
-      };
+      const body = req.body as IntakePayload;
 
       // ── Validate numeric fields ────────────────────────────────────────────
-      if (monthlyIncome !== undefined && (typeof monthlyIncome !== 'number' || monthlyIncome < 0)) {
-        res.status(400).json({ error: 'monthlyIncome must be a non-negative number' });
-        return;
+      const numericFields = [
+        'monthlyIncome', 'expFood', 'expHousekeeping', 'expApparel',
+        'expPersonalCare', 'expHousing', 'expUtilities', 'expTransportGas',
+        'expCarInsurance', 'totalDebt', 'studentLoanDebt',
+      ] as const;
+
+      for (const field of numericFields) {
+        const val = body[field];
+        if (val !== undefined && (typeof val !== 'number' || val < 0)) {
+          res.status(400).json({ error: `${field} must be a non-negative number` });
+          return;
+        }
       }
-      if (totalDebt !== undefined && (typeof totalDebt !== 'number' || totalDebt < 0)) {
-        res.status(400).json({ error: 'totalDebt must be a non-negative number' });
-        return;
-      }
-      if (studentLoanDebt !== undefined && (typeof studentLoanDebt !== 'number' || studentLoanDebt < 0)) {
-        res.status(400).json({ error: 'studentLoanDebt must be a non-negative number' });
+
+      if (
+        body.householdSize !== undefined &&
+        (typeof body.householdSize !== 'number' || body.householdSize < 0)
+      ) {
+        res.status(400).json({ error: 'householdSize must be a non-negative integer' });
         return;
       }
 
-      // ── Build update payload (only include defined fields) ─────────────────
-      // This allows partial saves — undefined fields are not overwritten.
-      const data: Record<string, unknown> = {};
-      if (phone            !== undefined) data.phone            = phone;
-      if (address          !== undefined) data.address          = address;
-      if (employmentStatus !== undefined) data.employmentStatus = employmentStatus;
-      if (monthlyIncome    !== undefined) data.monthlyIncome    = monthlyIncome;
-      if (totalDebt        !== undefined) data.totalDebt        = totalDebt;
-      if (studentLoanDebt  !== undefined) data.studentLoanDebt  = studentLoanDebt;
-      if (loanTypes        !== undefined) data.loanTypes        = loanTypes;
-      if (hardshipNotes    !== undefined) data.hardshipNotes    = hardshipNotes;
-      if (isCompleted      !== undefined) data.isCompleted      = isCompleted;
+      // ── Build data payload — only include defined fields ───────────────────
+      const data = definedOnly(body);
 
       // ── Upsert intake profile ──────────────────────────────────────────────
       const prisma = getPrisma();

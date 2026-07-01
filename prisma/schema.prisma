@@ -143,7 +143,8 @@ model Client {
 // =============================================================================
 // INTAKE PROFILE
 //
-// A 1-to-1 extension of Client that stores student debt bankruptcy intake data.
+// A 1-to-1 extension of Client storing DOJ-aligned bankruptcy intake data.
+// Modelled after the official undue-hardship determination form fields.
 // Created when a client begins the onboarding flow; updated on every step save.
 // Supports partial saves — all fields are optional except the clientId FK.
 //
@@ -153,6 +154,10 @@ model Client {
 //
 // onDelete: Cascade — intake data is automatically removed if the Client
 //           record is deleted. No orphaned intake rows.
+//
+// ⚠ SECURITY NOTE: The `ssn` field stores plain text for MVP only.
+//   Before production launch this MUST be encrypted at rest using AES-256
+//   (e.g., via pgcrypto or application-layer encryption before Prisma write).
 // =============================================================================
 
 model IntakeProfile {
@@ -163,29 +168,54 @@ model IntakeProfile {
   clientId String @unique
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
-  // ── Contact ───────────────────────────────────────────────────────────────
-  phone   String?
-  address String?
+  // ── Personal & Household ───────────────────────────────────────────────────
+  dob           String? // MM/DD/YYYY
+  ssn           String? // ⚠ Encrypt before production — see note above
+  county        String?
+  phone         String?
+  address       String?
+  householdSize Int     @default(0)
 
-  // ── Financial profile ─────────────────────────────────────────────────────
-  employmentStatus String? // "employed" | "self-employed" | "unemployed" | "retired" | "other"
-  monthlyIncome    Float?
-  totalDebt        Float?
-  studentLoanDebt  Float?
-  loanTypes        String? // "Federal" | "Private" | "Both"
+  // ── Health & Employment ────────────────────────────────────────────────────
+  hasDisability   Boolean @default(false)
+  isEmployed      Boolean @default(false)
+  unemployed5of10 Boolean @default(false) // Unemployed 5 of last 10 years (means test)
+  monthlyIncome   Float?
 
-  // ── Case narrative ────────────────────────────────────────────────────────
-  hardshipNotes String?
+  // ── Assets ────────────────────────────────────────────────────────────────
+  housingStatus   String? // "Own" | "Rent"
+  hasCar          Boolean @default(false)
+  hasRetirement   Boolean @default(false)
+  expectingRefund Boolean @default(false)
 
-  // ── Completion flag ───────────────────────────────────────────────────────
+  // ── Monthly Expenses (Itemized per DOJ undue-hardship form) ───────────────
+  expFood         Float?
+  expHousekeeping Float?
+  expApparel      Float?
+  expPersonalCare Float?
+  expHousing      Float?
+  expUtilities    Float?
+  expTransportGas Float?
+  expCarInsurance Float?
+
+  // ── Education & Debt ───────────────────────────────────────────────────────
+  totalDebt       Float?
+  studentLoanDebt Float?
+  schoolsHistory  String? @db.Text // School names, degrees, years attended
+
+  // ── Case narrative ─────────────────────────────────────────────────────────
+  hardshipNotes   String? @db.Text
+  unmetBasicNeeds String? @db.Text
+
+  // ── Completion flag ────────────────────────────────────────────────────────
   // Set to true when the client submits the final step of the intake form.
-  // Lawyers filter their dashboard on isCompleted: true to find ready cases.
+  // Lawyers filter on isCompleted: true to find cases ready for review.
   isCompleted Boolean @default(false)
 
-  // ── Timestamps ────────────────────────────────────────────────────────────
+  // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // ── Table name ────────────────────────────────────────────────────────────
+  // ── Table name ─────────────────────────────────────────────────────────────
   @@map("intake_profiles")
 }
