@@ -207,4 +207,122 @@ router.get(
   }
 );
 
+// =============================================================================
+// GET /api/v1/admin/clients/:id/eligibility
+//
+// Runs the Brunner Test undue-hardship algorithm against a client's DOJ
+// Intake Profile and returns a scored eligibility analysis.
+//
+// The Brunner Test (11 U.S.C. § 523(a)(8)) has two prongs relevant to the
+// "14% eligibility" pre-screening:
+//
+//   Prong 1 — Minimal Standard of Living (Poverty)
+//     Checks whether disposable income after essential expenses leaves the
+//     debtor unable to maintain even a minimal standard of living.
+//     Threshold: disposableIncome <= $150/mo  (buffer for incidentals).
+//
+//   Prong 2 — Persistence (Good Faith Future Prospect)
+//     Checks whether the hardship is expected to persist for a significant
+//     portion of the repayment period.
+//     Met IF: hasDisability === true  OR  unemployed5of10 === true.
+//
+//   Overall Score:
+//     Both prongs met  → HIGH_PROBABILITY
+//     One prong met    → MEDIUM_PROBABILITY
+//     Neither met      → LOW_PROBABILITY
+//
+// Path param:
+//   :id — the client's UUID
+//
+// Responses:
+//   200  { client_id, analysis: { totalExpenses, disposableIncome,
+//           isProng1Met, isProng2Met, overallScore } }
+//   401  { error: string }   — Missing or invalid JWT
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   404  { error: string }   — No client found for the given id
+//   422  { error: string }   — Client has no intake profile yet
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.get(
+  '/clients/:id/eligibility',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      // ── Fetch client with intake profile ──────────────────────────────────
+      const client = await prisma.client.findUnique({
+        where: { id: clientId },
+        include: { intakeProfile: true },
+      });
+
+      if (!client) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      const profile = client.intakeProfile;
+
+      if (!profile) {
+        res.status(422).json({
+          error: 'Client has not yet completed an intake profile. Eligibility cannot be determined.',
+        });
+        return;
+      }
+
+      // ── Brunner Algorithm ─────────────────────────────────────────────────
+
+      // Helper: treat null/undefined expense fields as $0 (partial saves are
+      // supported; missing fields mean the expense does not apply).
+      const toNum = (v: number | null | undefined): number => v ?? 0;
+
+      // Prong 1 — Poverty / Minimal Standard of Living
+      const totalExpenses: number =
+        toNum(profile.expFood)         +
+        toNum(profile.expHousekeeping) +
+        toNum(profile.expApparel)      +
+        toNum(profile.expPersonalCare) +
+        toNum(profile.expHousing)      +
+        toNum(profile.expUtilities)    +
+        toNum(profile.expTransportGas) +
+        toNum(profile.expCarInsurance);
+
+      const disposableIncome: number = toNum(profile.monthlyIncome) - totalExpenses;
+
+      // $150/mo buffer: even a debtor with modest surplus cannot maintain a
+      // minimal standard of living when their margin is this thin.
+      const isProng1Met: boolean = disposableIncome <= 150;
+
+      // Prong 2 — Persistence of Hardship
+      const isProng2Met: boolean =
+        profile.hasDisability === true ||
+        profile.unemployed5of10 === true;
+
+      // ── Overall Score ─────────────────────────────────────────────────────
+      const prongsMetCount = (isProng1Met ? 1 : 0) + (isProng2Met ? 1 : 0);
+
+      const overallScore =
+        prongsMetCount === 2 ? 'HIGH_PROBABILITY'   :
+        prongsMetCount === 1 ? 'MEDIUM_PROBABILITY' :
+                               'LOW_PROBABILITY';
+
+      // ── Response ──────────────────────────────────────────────────────────
+      res.status(200).json({
+        client_id: clientId,
+        analysis: {
+          totalExpenses,
+          disposableIncome,
+          isProng1Met,
+          isProng2Met,
+          overallScore,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
+
