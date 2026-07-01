@@ -17,6 +17,7 @@ import dotenv from 'dotenv';
 import authRouter from './routes/auth';
 import clientRouter from './routes/clients';
 import intakeRouter from './routes/intake';
+import adminRouter from './routes/admin';
 
 // ── Load environment ──────────────────────────────────────────────────────────
 dotenv.config();
@@ -84,6 +85,7 @@ app.get('/health', (_req: Request, res: Response) => {
 app.use('/api/auth', authRouter);
 app.use('/api/v1/clients', clientRouter);
 app.use('/api/v1/intake', intakeRouter);
+app.use('/api/v1/admin', adminRouter);
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
