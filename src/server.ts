@@ -20,7 +20,15 @@ import clientRouter from './routes/clients';
 dotenv.config();
 
 // ── Validate required env vars at startup ────────────────────────────────────
-const REQUIRED_ENV = ['PORT', 'API_BEARER_TOKEN', 'CORS_ORIGINS', 'DATABASE_URL'] as const;
+const REQUIRED_ENV = [
+  'PORT',
+  'API_BEARER_TOKEN',
+  'CORS_ORIGINS',
+  'DATABASE_URL',
+  'RESEND_API_KEY',
+  'EMAIL_FROM_ADDRESS',
+  'JWT_SECRET',
+] as const;
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
     console.error(`[server] FATAL: Missing required environment variable: ${key}`);
