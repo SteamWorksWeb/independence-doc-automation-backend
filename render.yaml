@@ -49,3 +49,18 @@ services:
 
       - key: CORS_ORIGINS
         sync: false        # Set in Render dashboard — comma-separated allowed origins
+
+      - key: JWT_SECRET
+        sync: false        # Set in Render dashboard — signs Lawyer + Client JWTs (min 32 chars)
+
+      - key: JWT_EXPIRES_IN
+        value: 7d          # Default token lifetime; override in dashboard if needed
+
+      - key: RESEND_API_KEY
+        sync: false        # Set in Render dashboard — Resend.com API key for transactional email
+
+      - key: EMAIL_FROM_ADDRESS
+        sync: false        # Set in Render dashboard — verified sender address on Resend
+
+      - key: FRONTEND_URL
+        sync: false        # Set in Render dashboard — Vercel deployment URL (for magic-link emails)

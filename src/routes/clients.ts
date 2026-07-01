@@ -28,24 +28,26 @@ import crypto from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '@prisma/client';
 
 import { requireBearerToken } from '../middleware/auth';
 import { sendVerificationEmail } from '../utils/email';
 
-// ── Lazy Prisma client ────────────────────────────────────────────────────────
+// ── Prisma client singleton (Prisma 7 — requires explicit pg adapter) ─────────
 //
-//   Imported lazily so the module loads cleanly before `prisma generate` runs.
-//   After the first migration, this pattern can be replaced with a top-level
-//   singleton (import { PrismaClient } from '@prisma/client').
+//   Prisma 7 does not auto-configure the database URL from the environment.
+//   We must supply a pg Pool + PrismaPg adapter, matching prisma.config.ts.
+//   The singleton is lazily initialised on first use and reused thereafter.
 //
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _prisma: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getPrisma(): Promise<any> {
+let _prisma: PrismaClient | null = null;
+
+function getPrisma(): PrismaClient {
   if (!_prisma) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { PrismaClient } = require('@prisma/client');
-    _prisma = new PrismaClient();
+    const pool    = new Pool({ connectionString: process.env.DATABASE_URL as string });
+    const adapter = new PrismaPg(pool);
+    _prisma = new PrismaClient({ adapter });
   }
   return _prisma;
 }
@@ -131,7 +133,7 @@ router.post(
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24h
 
       // ── Step 3: Persist via Prisma ─────────────────────────────────────────
-      const prisma = await getPrisma();
+      const prisma = getPrisma();
       const client = await prisma.client.create({
         data: {
           name:               (name as string).trim(),
@@ -219,8 +221,8 @@ router.get(
         .digest('hex');
 
       // ── Look up client by hashed token ────────────────────────────────────
-      const prisma = await getPrisma();
-      const client = await prisma.client.findUnique({
+      const prisma = getPrisma();
+      const client = await prisma.client.findFirst({
         where: { verificationToken: hashedToken },
         select: {
           id:                  true,

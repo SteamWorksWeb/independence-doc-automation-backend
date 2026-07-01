@@ -14,6 +14,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
+import authRouter from './routes/auth';
 import clientRouter from './routes/clients';
 
 // ── Load environment ──────────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ const REQUIRED_ENV = [
   'RESEND_API_KEY',
   'EMAIL_FROM_ADDRESS',
   'JWT_SECRET',
+  'FRONTEND_URL',
 ] as const;
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
@@ -78,6 +80,7 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // ── API routes ────────────────────────────────────────────────────────────────
+app.use('/api/auth', authRouter);
 app.use('/api/v1/clients', clientRouter);
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
