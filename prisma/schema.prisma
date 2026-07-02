@@ -219,3 +219,60 @@ model IntakeProfile {
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("intake_profiles")
 }
+
+// =============================================================================
+// INVITATION
+//
+// The "Velvet Rope" — no open registration. An Admin/Lawyer must invite a
+// client via email before they can register. Each invitation record holds a
+// secure crypto token that is embedded in the invite link.
+//
+// Flow:
+//   1. Lawyer POSTs to /api/v1/admin/invites with client email
+//   2. Backend generates a crypto token, saves Invitation, logs invite link
+//   3. Client clicks link with ?token=<token>
+//   4. Registration endpoint validates token against Invitation table
+//   5. On successful registration, isUsed is set to true (single-use)
+//
+// Token security:
+//   - 32-byte random hex token (crypto.randomBytes) — 256 bits of entropy.
+//   - Token is unique-indexed — O(1) lookup, no collisions.
+//   - Expires after 7 days from creation.
+//   - Single-use: isUsed flag prevents replay.
+//   - Email must match: even a valid token rejects if the registrant provides
+//     a different email address.
+// =============================================================================
+
+model Invitation {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id    String @id @default(uuid())
+
+  // ── Invite target ──────────────────────────────────────────────────────────
+  // The email address of the client being invited.
+  email String
+
+  // ── Secure token ───────────────────────────────────────────────────────────
+  // 64-char hex string (32 bytes). Embedded in the invite link URL.
+  token String @unique
+
+  // ── Expiry ─────────────────────────────────────────────────────────────────
+  // UTC timestamp — invite links are valid for 7 days after creation.
+  expiresAt DateTime
+
+  // ── Usage flag ─────────────────────────────────────────────────────────────
+  // Set to true after the client successfully registers using this invite.
+  // Prevents the same invitation from being used to create multiple accounts.
+  isUsed Boolean @default(false)
+
+  // ── Timestamps ─────────────────────────────────────────────────────────────
+  createdAt DateTime @default(now())
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  // Email index: lookup invitations by client email address.
+  @@index([email])
+  // Token index is implicit from @unique, but email lookup is common for
+  // "has this person already been invited?" checks.
+
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("invitations")
+}

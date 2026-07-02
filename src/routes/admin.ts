@@ -15,6 +15,7 @@
 //     client has started or completed the DOJ questionnaire.
 // =============================================================================
 
+import crypto from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
@@ -324,5 +325,96 @@ router.get(
   }
 );
 
-export default router;
+// =============================================================================
+// POST /api/v1/admin/invites
+//
+// Creates a secure invitation for a client to register. Part of the "Velvet
+// Rope" system — no open public registration. Only authenticated lawyers can
+// invite clients.
+//
+// Flow:
+//   1. Lawyer provides the client's email address
+//   2. Backend generates a 32-byte crypto-random token (256 bits of entropy)
+//   3. Saves an Invitation record with a 7-day expiry window
+//   4. Logs the invite link to the console (email sending is mocked for now)
+//   5. Returns the token in the response for frontend testing
+//
+// Request body (JSON):
+//   {
+//     email: string  — Client email to invite  (required)
+//   }
+//
+// Responses:
+//   201  { invitation: { id, email, token, expiresAt } }  — Invite created
+//   400  { error: string }   — Missing or invalid email
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
 
+router.post(
+  '/invites',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { email } = req.body as { email?: string };
+
+      // ── Validate email presence ───────────────────────────────────────────
+      if (!email?.trim()) {
+        res.status(400).json({ error: 'Email address is required' });
+        return;
+      }
+
+      // ── Validate email format ─────────────────────────────────────────────
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        res.status(400).json({ error: 'Invalid email address format' });
+        return;
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+
+      // ── Generate secure token ─────────────────────────────────────────────
+      //   32 bytes → 64-char hex string → 256 bits of entropy.
+      //   Stored directly in the DB (not hashed) because the token is
+      //   single-use and short-lived (7 days). The invite link embeds
+      //   this token as a query parameter.
+      const token = crypto.randomBytes(32).toString('hex');
+
+      // ── Set expiration: 7 days from now ───────────────────────────────────
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      // ── Persist invitation ────────────────────────────────────────────────
+      const prisma     = getPrisma();
+      const invitation = await prisma.invitation.create({
+        data: {
+          email: normalizedEmail,
+          token,
+          expiresAt,
+        },
+        select: {
+          id:        true,
+          email:     true,
+          token:     true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      // ── Mock email: log invite link to console ────────────────────────────
+      const inviteLink = `https://independence-doc-automation.vercel.app/login?token=${token}`;
+      console.log(`[admin] 📧 INVITE LINK for ${normalizedEmail}:`);
+      console.log(`[admin]    ${inviteLink}`);
+
+      // ── Return invitation (including token for frontend testing) ─────────
+      res.status(201).json({
+        invitation,
+        inviteLink,
+      });
+
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+export default router;

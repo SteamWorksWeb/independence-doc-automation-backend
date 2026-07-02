@@ -57,20 +57,36 @@ const router = Router();
 // =============================================================================
 // POST /api/v1/clients
 //
-// Register a new client record. Caller must supply the API Bearer token
-// (i.e., this is invoked by the lawyer-facing Next.js admin, not the client).
+// Register a new client record. REQUIRES a valid invitation token from the
+// "Velvet Rope" system — no open public registration.
+//
+// The caller must supply:
+//   1. The API Bearer token (i.e., this is invoked by the lawyer-facing
+//      Next.js admin, not the client directly).
+//   2. An invitation `token` in the request body — this is validated against
+//      the Invitation table before the account is created.
+//
+// Invitation validation:
+//   - Token must exist in the Invitation table
+//   - Token must not be expired (expiresAt > now)
+//   - Token must not have been used before (isUsed === false)
+//   - The email in the request body must match the invitation email
+//   - On successful registration, the invitation is marked isUsed: true
 //
 // Request body (JSON):
 //   {
 //     name:     string  — Client full name                (required)
-//     email:    string  — Client email address             (required, unique)
+//     email:    string  — Client email address             (required, must match invite)
 //     password: string  — Plain-text password              (required, min 8 chars)
 //     lawyerId: string  — UUID of the assigning lawyer     (required)
+//     token:    string  — Invitation token from invite link (required)
 //   }
 //
 // Responses:
 //   201  { id, name, email, lawyerId, createdAt }  — Client created, email sent
 //   400  { error: string }                          — Validation failure
+//   403  { error: string }                          — Invalid, expired, used, or
+//                                                     email-mismatched invitation
 //   409  { error: string }                          — Email already registered
 //   500  { error: 'Internal server error' }         — Global handler
 // =============================================================================
@@ -80,11 +96,12 @@ router.post(
   requireBearerToken,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { name, email, password, lawyerId } = req.body as {
+      const { name, email, password, lawyerId, token } = req.body as {
         name?: string;
         email?: string;
         password?: string;
         lawyerId?: string;
+        token?: string;
       };
 
       // ── Field presence validation ──────────────────────────────────────────
@@ -93,6 +110,7 @@ router.post(
       if (!email?.trim())    missing.push('email');
       if (!password)         missing.push('password');
       if (!lawyerId?.trim()) missing.push('lawyerId');
+      if (!token?.trim())    missing.push('token');
 
       if (missing.length > 0) {
         res.status(400).json({
@@ -111,6 +129,40 @@ router.post(
       // ── Minimum password length ────────────────────────────────────────────
       if ((password as string).length < 8) {
         res.status(400).json({ error: 'Password must be at least 8 characters' });
+        return;
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // VELVET ROPE: Validate invitation token
+      // ════════════════════════════════════════════════════════════════════════
+      const prisma = getPrisma();
+      const normalizedEmail = (email as string).trim().toLowerCase();
+
+      const invitation = await prisma.invitation.findUnique({
+        where: { token: (token as string).trim() },
+      });
+
+      // ── Token does not exist ───────────────────────────────────────────────
+      if (!invitation) {
+        res.status(403).json({ error: 'Invalid invitation token' });
+        return;
+      }
+
+      // ── Token already used ─────────────────────────────────────────────────
+      if (invitation.isUsed) {
+        res.status(403).json({ error: 'This invitation has already been used' });
+        return;
+      }
+
+      // ── Token expired ──────────────────────────────────────────────────────
+      if (new Date() > new Date(invitation.expiresAt)) {
+        res.status(403).json({ error: 'This invitation has expired' });
+        return;
+      }
+
+      // ── Email mismatch ─────────────────────────────────────────────────────
+      if (invitation.email !== normalizedEmail) {
+        res.status(403).json({ error: 'Email address does not match the invitation' });
         return;
       }
 
@@ -133,11 +185,10 @@ router.post(
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24h
 
       // ── Step 3: Persist via Prisma ─────────────────────────────────────────
-      const prisma = getPrisma();
       const client = await prisma.client.create({
         data: {
           name:               (name as string).trim(),
-          email:              (email as string).trim().toLowerCase(),
+          email:              normalizedEmail,
           passwordHash,
           lawyerId:           (lawyerId as string).trim(),
           verificationToken,
@@ -153,7 +204,13 @@ router.post(
         },
       });
 
-      // ── Step 4: Send verification email ───────────────────────────────────
+      // ── Step 4: Mark invitation as used ────────────────────────────────────
+      await prisma.invitation.update({
+        where: { id: invitation.id },
+        data:  { isUsed: true },
+      });
+
+      // ── Step 5: Send verification email ───────────────────────────────────
       //
       //   We pass rawToken (not the hash) — the email utility embeds it in
       //   the magic-link URL for the client to click.
@@ -167,7 +224,7 @@ router.post(
         // Continue — return 201, surface email failure via server logs
       }
 
-      // ── Step 5: Return created client (safe fields only) ──────────────────
+      // ── Step 6: Return created client (safe fields only) ──────────────────
       res.status(201).json(client);
 
     } catch (err) {
@@ -186,6 +243,7 @@ router.post(
     }
   }
 );
+
 
 // =============================================================================
 // GET /api/v1/clients/verify
