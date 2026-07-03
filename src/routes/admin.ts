@@ -8,6 +8,7 @@
 //   GET    /api/v1/admin/clients              — Fetch all clients (lawyer-only)
 //   GET    /api/v1/admin/clients/:id          — Fetch single client detail
 //   GET    /api/v1/admin/clients/:id/eligibility — Brunner eligibility analysis
+//   PATCH  /api/v1/admin/clients/:id/status   — Update client pipeline status
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
@@ -141,6 +142,7 @@ router.get(
         select: {
           id:          true,
           email:       true,
+          status:      true,
           isVerified:  true,
           createdAt:   true,
           // Include the full intakeProfile so the dashboard can determine
@@ -191,6 +193,7 @@ router.get(
         select: {
           id:         true,
           email:      true,
+          status:     true,
           isVerified: true,
           createdAt:  true,
           // Include the full intakeProfile — every DOJ questionnaire field
@@ -323,6 +326,90 @@ router.get(
           overallScore,
         },
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PATCH /api/v1/admin/clients/:id/status
+//
+// Moves a client through the admin pipeline by updating their status.
+// The frontend renders a 4-step pipeline UI; this endpoint is the mechanism
+// that actually persists each transition.
+//
+// Allowed status values (exact strings):
+//   "Intake Pending"   — Intake not yet reviewed
+//   "Ready for Review" — Intake complete, awaiting lawyer review
+//   "Approved"         — Case approved for filing
+//   "Rejected"         — Case not accepted
+//
+// Path param:
+//   :id — the client's UUID
+//
+// Request body (JSON):
+//   { status: string }  — must be one of the four allowed values
+//
+// Responses:
+//   200  { client: Client }  — Updated client record
+//   400  { error: string }   — Invalid or missing status value
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   404  { error: string }   — No client found for the given id
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+const ALLOWED_STATUSES = [
+  'Intake Pending',
+  'Ready for Review',
+  'Approved',
+  'Rejected',
+] as const;
+
+router.patch(
+  '/clients/:id/status',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+      const { status } = req.body as { status?: string };
+
+      // ── Validate status value ───────────────────────────────────────────────
+      if (!status || !ALLOWED_STATUSES.includes(status as typeof ALLOWED_STATUSES[number])) {
+        res.status(400).json({
+          error: `Invalid status. Must be one of: ${ALLOWED_STATUSES.join(', ')}`,
+        });
+        return;
+      }
+
+      // ── Verify the client exists ────────────────────────────────────────────
+      const existing = await prisma.client.findUnique({
+        where: { id: clientId },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      // ── Update status ───────────────────────────────────────────────────────
+      const updatedClient = await prisma.client.update({
+        where: { id: clientId },
+        data:  { status },
+        select: {
+          id:         true,
+          email:      true,
+          status:     true,
+          isVerified: true,
+          createdAt:  true,
+          intakeProfile: true,
+        },
+      });
+
+      console.log(`[admin] 📋 Client ${clientId} status updated to "${status}"`);
+
+      res.status(200).json({ client: updatedClient });
     } catch (err) {
       next(err);
     }

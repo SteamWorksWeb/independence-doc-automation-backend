@@ -115,6 +115,14 @@ model Client {
   // Null once verification is complete.
   verificationExpires DateTime?
 
+  // ── Pipeline status ──────────────────────────────────────────────────────────
+  // Tracks the client through the admin pipeline. Valid values:
+  //   "Intake Pending"   — Default for new clients; intake not yet reviewed
+  //   "Ready for Review" — Intake complete, awaiting lawyer review
+  //   "Approved"         — Case approved for filing
+  //   "Rejected"         — Case not accepted
+  status String @default("Intake Pending")
+
   // ── Lawyer assignment ──────────────────────────────────────────────────────
   // Every client must be assigned to a supervising lawyer.
   lawyerId String
