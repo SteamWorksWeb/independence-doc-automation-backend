@@ -5,8 +5,12 @@
 // Mounted at: /api/v1/admin  (see server.ts)
 //
 // Routes:
-//   GET /api/v1/admin/clients — Fetch all clients (lawyer-only)
-//
+//   GET    /api/v1/admin/clients              — Fetch all clients (lawyer-only)
+//   GET    /api/v1/admin/clients/:id          — Fetch single client detail
+//   GET    /api/v1/admin/clients/:id/eligibility — Brunner eligibility analysis
+//   POST   /api/v1/admin/invites              — Create client invitation
+//   GET    /api/v1/admin/invites              — List pending invitations
+//   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
 //   - Only JWTs with role: 'lawyer' are accepted; all others receive 403.
@@ -411,6 +415,103 @@ router.post(
         inviteLink,
       });
 
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// GET /api/v1/admin/invites
+//
+// Returns all pending (unused) client invitations, ordered newest-first.
+// This lets the admin dashboard display outstanding invitations so the lawyer
+// can spot typos, resend links, or revoke invitations that are no longer needed.
+//
+// Responses:
+//   200  { invitations: Invitation[] }  — Array of pending invites
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.get(
+  '/invites',
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+
+      const invitations = await prisma.invitation.findMany({
+        where: { isUsed: false },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id:        true,
+          email:     true,
+          token:     true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      res.status(200).json({ invitations });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// DELETE /api/v1/admin/invites/:id
+//
+// Revokes a pending client invitation. Instead of hard-deleting the record
+// (which would lose audit history), we instantly invalidate it by:
+//   1. Setting expiresAt to the current timestamp (immediately expired)
+//   2. Setting isUsed to true (prevents the registration endpoint from
+//      accepting the token even if it hasn't technically expired)
+//
+// This ensures that any outstanding invite link becomes permanently unusable
+// while preserving the invitation record for audit/compliance purposes.
+//
+// Path param:
+//   :id — the invitation's UUID
+//
+// Responses:
+//   200  { message: string }   — Invitation successfully revoked
+//   404  { error: string }     — No invitation found for the given id
+//   401  { error: string }     — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }     — Valid JWT but role !== 'lawyer'
+//   500  { error: string }     — Global error handler
+// =============================================================================
+
+router.delete(
+  '/invites/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma       = getPrisma();
+      const invitationId = String(req.params.id);
+
+      // ── Verify the invitation exists ──────────────────────────────────────
+      const existing = await prisma.invitation.findUnique({
+        where: { id: invitationId },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Invitation not found.' });
+        return;
+      }
+
+      // ── Instantly invalidate — soft revoke ────────────────────────────────
+      await prisma.invitation.update({
+        where: { id: invitationId },
+        data: {
+          expiresAt: new Date(),   // immediately expired
+          isUsed:    true,         // blocks registration flow
+        },
+      });
+
+      console.log(`[admin] 🚫 Invitation ${invitationId} for ${existing.email} revoked.`);
+
+      res.status(200).json({ message: 'Invitation revoked successfully.' });
     } catch (err) {
       next(err);
     }
