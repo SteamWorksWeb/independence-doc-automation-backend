@@ -83,9 +83,12 @@ const router = Router();
 //     name:     string  — Client full name                (required)
 //     email:    string  — Client email address             (required, must match invite)
 //     password: string  — Plain-text password              (required, min 8 chars)
-//     lawyerId: string  — UUID of the assigning lawyer     (required)
 //     token:    string  — Invitation token from invite link (required)
 //   }
+//
+// Note: lawyerId is NOT accepted from the caller. It is read from the
+// Invitation record after token validation, ensuring the client is always
+// assigned to the lawyer who created the invitation.
 //
 // Responses:
 //   201  { id, name, email, lawyerId, createdAt }  — Client created, email sent
@@ -101,11 +104,10 @@ router.post(
   requireBearerToken,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { name, email, password, lawyerId, token } = req.body as {
+      const { name, email, password, token } = req.body as {
         name?: string;
         email?: string;
         password?: string;
-        lawyerId?: string;
         token?: string;
       };
 
@@ -114,7 +116,6 @@ router.post(
       if (!name?.trim())     missing.push('name');
       if (!email?.trim())    missing.push('email');
       if (!password)         missing.push('password');
-      if (!lawyerId?.trim()) missing.push('lawyerId');
       if (!token?.trim())    missing.push('token');
 
       if (missing.length > 0) {
@@ -171,6 +172,12 @@ router.post(
         return;
       }
 
+      // ── Derive lawyerId from the invitation ──────────────────────────────────────
+      // The caller does not supply lawyerId. We read it from the validated
+      // Invitation record, guaranteeing the client is assigned to the lawyer
+      // who originally created the invitation.
+      const lawyerId = invitation.lawyerId;
+
       // ── Step 1: Hash password (bcrypt, cost 12) ────────────────────────────
       const passwordHash = await bcrypt.hash(password as string, 12);
 
@@ -195,7 +202,7 @@ router.post(
           name:               (name as string).trim(),
           email:              normalizedEmail,
           passwordHash,
-          lawyerId:           (lawyerId as string).trim(),
+          lawyerId:           lawyerId,
           verificationToken,
           verificationExpires,
         },

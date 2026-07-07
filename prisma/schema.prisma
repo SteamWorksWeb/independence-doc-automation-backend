@@ -65,7 +65,8 @@ model Lawyer {
   // ── Relations ──────────────────────────────────────────────────────────────
   // A Lawyer supervises many Clients.
   // onDelete: Restrict prevents accidental orphaning of Client records.
-  clients Client[]
+  clients      Client[]
+  invitations  Invitation[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -272,15 +273,20 @@ model Invitation {
   // Prevents the same invitation from being used to create multiple accounts.
   isUsed Boolean @default(false)
 
-  // ── Timestamps ─────────────────────────────────────────────────────────────
+  // ── Timestamps ────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
 
-  // ── Indexes ────────────────────────────────────────────────────────────────
+  // ── Lawyer relation ───────────────────────────────────────────────────────
+  // The lawyer who created this invitation.
+  // Used at client registration to satisfy Client.lawyerId (non-nullable).
+  lawyerId  String
+  lawyer    Lawyer   @relation(fields: [lawyerId], references: [id], onDelete: Restrict)
+
+  // ── Indexes ───────────────────────────────────────────────────────────────
   // Email index: lookup invitations by client email address.
   @@index([email])
-  // Token index is implicit from @unique, but email lookup is common for
-  // "has this person already been invited?" checks.
+  @@index([lawyerId])
 
-  // ── Table name ─────────────────────────────────────────────────────────────
+  // ── Table name ────────────────────────────────────────────────────────────
   @@map("invitations")
 }
