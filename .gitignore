@@ -25,3 +25,4 @@ Thumbs.db
 logs/
 
 /src/generated/prisma
+.env
