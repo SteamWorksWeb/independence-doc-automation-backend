@@ -11,7 +11,7 @@ services:
   - type: web
     name: independence-law-backend
     runtime: node
-    region: ohio          # us-east-2 — closest to AWS RDS us-east-2 if applicable; change as needed
+    region: virginia       # us-east-1 — closest to AWS RDS us-east-2 if applicable; change as needed
 
     # ── Build ────────────────────────────────────────────────────────────────
     # 1. Install exact dependency versions from lockfile (ci = reproducible)

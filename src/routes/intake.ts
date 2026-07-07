@@ -30,7 +30,12 @@ let _prisma: PrismaClient | null = null;
 
 function getPrisma(): PrismaClient {
   if (!_prisma) {
-    const pool    = new Pool({ connectionString: process.env.DATABASE_URL as string });
+    const pool    = new Pool({
+      connectionString: process.env.DATABASE_URL as string,
+      ssl: process.env.NODE_ENV === 'production'
+        ? { rejectUnauthorized: false }
+        : false,
+    });
     const adapter = new PrismaPg(pool);
     _prisma = new PrismaClient({ adapter });
   }
