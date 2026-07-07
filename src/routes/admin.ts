@@ -452,6 +452,7 @@ router.post(
   '/invites',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
       const { email } = req.body as { email?: string };
 
       // ── Validate email presence ───────────────────────────────────────────
@@ -483,9 +484,10 @@ router.post(
       const prisma     = getPrisma();
       const invitation = await prisma.invitation.create({
         data: {
-          email: normalizedEmail,
+          email:    normalizedEmail,
           token,
           expiresAt,
+          lawyerId,
         },
         select: {
           id:        true,
