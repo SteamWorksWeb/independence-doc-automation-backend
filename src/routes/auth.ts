@@ -2,10 +2,11 @@
 // THE INDEPENDENCE LAW FIRM — LAWYER AUTH ROUTER
 // src/routes/auth.ts
 //
-// Mounted at: /api/auth  (see server.ts)
+// Mounted at: /api/auth  AND  /api/v1/auth  (see server.ts)
 //
 // Routes:
-//   POST /api/auth/login   — Lawyer login → returns JWT (public)
+//   POST /api/auth/login       — Lawyer login → returns JWT (public)
+//   POST /api/v1/auth/login    — Same handler, v1 versioned path (alias)
 //
 // Security model:
 //   - Lawyers are internal firm staff seeded directly into the DB.
@@ -112,7 +113,7 @@ router.post(
       const expiresIn = (process.env.JWT_EXPIRES_IN ?? '7d') as jwt.SignOptions['expiresIn'];
 
       const token = jwt.sign(
-        { sub: lawyer.id, role: 'lawyer' },
+        { sub: lawyer.id, email: lawyer.email, role: 'lawyer' },
         jwtSecret,
         { expiresIn },
       );

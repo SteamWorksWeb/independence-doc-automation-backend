@@ -82,7 +82,8 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // ── API routes ────────────────────────────────────────────────────────────────
-app.use('/api/auth', authRouter);
+app.use('/api/auth', authRouter);        // legacy path — kept for frontend compat
+app.use('/api/v1/auth', authRouter);     // versioned alias (POST /api/v1/auth/login)
 app.use('/api/v1/clients', clientRouter);
 app.use('/api/v1/intake', intakeRouter);
 app.use('/api/v1/admin', adminRouter);
