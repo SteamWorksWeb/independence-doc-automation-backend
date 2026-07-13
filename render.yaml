@@ -17,7 +17,7 @@ services:
     # 1. Install exact dependency versions from lockfile (ci = reproducible)
     # 2. Generate the Prisma client for the target platform
     # 3. Compile TypeScript → dist/
-    buildCommand: npm ci && npx prisma generate && npm run build
+    buildCommand: npm ci && npx prisma migrate deploy && npx prisma generate && npm run build
 
     # ── Start ────────────────────────────────────────────────────────────────
     # Runs the compiled output; matches package.json "start" script
