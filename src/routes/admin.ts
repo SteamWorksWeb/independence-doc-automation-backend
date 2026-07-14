@@ -7,7 +7,7 @@
 // Routes:
 //   GET    /api/v1/admin/clients              — Fetch all clients (lawyer-only)
 //   GET    /api/v1/admin/clients/:id          — Fetch single client detail
-//   GET    /api/v1/admin/clients/:id/eligibility — Brunner eligibility analysis
+//   GET    /api/v1/admin/clients/:id/eligibility — Point-based eligibility score
 //   PATCH  /api/v1/admin/clients/:id/status   — Update client pipeline status
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
@@ -18,6 +18,7 @@
 //   - Password hashes are NEVER returned — fields are explicitly selected.
 //   - The intakeProfile is included so the dashboard can flag whether a
 //     client has started or completed the DOJ questionnaire.
+//   - Scoring logic lives exclusively in src/services/eligibilityEngine.ts.
 // =============================================================================
 
 import crypto from 'crypto';
@@ -26,6 +27,11 @@ import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import {
+  evaluateClient,
+  ClientNotFoundError,
+  IntakeProfileMissingError,
+} from '../services/eligibilityEngine';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -223,33 +229,19 @@ router.get(
 // =============================================================================
 // GET /api/v1/admin/clients/:id/eligibility
 //
-// Runs the Brunner Test undue-hardship algorithm against a client's DOJ
-// Intake Profile and returns a scored eligibility analysis.
+// Delegates to the EligibilityEngine service (src/services/eligibilityEngine.ts)
+// which runs the v1 point-based pre-screener and returns a structured result.
 //
-// The Brunner Test (11 U.S.C. § 523(a)(8)) has two prongs relevant to the
-// "14% eligibility" pre-screening:
-//
-//   Prong 1 — Minimal Standard of Living (Poverty)
-//     Checks whether disposable income after essential expenses leaves the
-//     debtor unable to maintain even a minimal standard of living.
-//     Threshold: disposableIncome <= $150/mo  (buffer for incidentals).
-//
-//   Prong 2 — Persistence (Good Faith Future Prospect)
-//     Checks whether the hardship is expected to persist for a significant
-//     portion of the repayment period.
-//     Met IF: hasDisability === true  OR  unemployed5of10 === true.
-//
-//   Overall Score:
-//     Both prongs met  → HIGH_PROBABILITY
-//     One prong met    → MEDIUM_PROBABILITY
-//     Neither met      → LOW_PROBABILITY
+// Algorithm summary (full logic lives in the service):
+//   Base 50. Income <3k → +20, Income >5k → -20.
+//   Disability → +15. Unemployed → +15.
+//   Owns car → -5. Expecting refund → -5. Clamped to [0, 100].
 //
 // Path param:
 //   :id — the client's UUID
 //
 // Responses:
-//   200  { client_id, analysis: { totalExpenses, disposableIncome,
-//           isProng1Met, isProng2Met, overallScore } }
+//   200  { client_id, eligibility: { score, status, reasons } }
 //   401  { error: string }   — Missing or invalid JWT
 //   403  { error: string }   — Valid JWT but role !== 'lawyer'
 //   404  { error: string }   — No client found for the given id
@@ -261,77 +253,28 @@ router.get(
   '/clients/:id/eligibility',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const prisma   = getPrisma();
       const clientId = String(req.params.id);
 
-      // ── Fetch client with intake profile ──────────────────────────────────
-      const client = await prisma.client.findUnique({
-        where: { id: clientId },
-        include: { intakeProfile: true },
-      });
+      // ── Delegate to the EligibilityEngine service ─────────────────────────
+      const result = await evaluateClient(clientId);
 
-      if (!client) {
+      // ── Return structured result ───────────────────────────────────────────
+      res.status(200).json({
+        client_id: clientId,
+        eligibility: result,
+      });
+    } catch (err) {
+      // ── Map typed service errors to HTTP status codes ──────────────────────
+      if (err instanceof ClientNotFoundError) {
         res.status(404).json({ error: 'Client not found.' });
         return;
       }
-
-      const profile = client.intakeProfile;
-
-      if (!profile) {
+      if (err instanceof IntakeProfileMissingError) {
         res.status(422).json({
           error: 'Client has not yet completed an intake profile. Eligibility cannot be determined.',
         });
         return;
       }
-
-      // ── Brunner Algorithm ─────────────────────────────────────────────────
-
-      // Helper: treat null/undefined expense fields as $0 (partial saves are
-      // supported; missing fields mean the expense does not apply).
-      const toNum = (v: number | null | undefined): number => v ?? 0;
-
-      // Prong 1 — Poverty / Minimal Standard of Living
-      const totalExpenses: number =
-        toNum(profile.expFood)         +
-        toNum(profile.expHousekeeping) +
-        toNum(profile.expApparel)      +
-        toNum(profile.expPersonalCare) +
-        toNum(profile.expHousing)      +
-        toNum(profile.expUtilities)    +
-        toNum(profile.expTransportGas) +
-        toNum(profile.expCarInsurance);
-
-      const disposableIncome: number = toNum(profile.monthlyIncome) - totalExpenses;
-
-      // $150/mo buffer: even a debtor with modest surplus cannot maintain a
-      // minimal standard of living when their margin is this thin.
-      const isProng1Met: boolean = disposableIncome <= 150;
-
-      // Prong 2 — Persistence of Hardship
-      const isProng2Met: boolean =
-        profile.hasDisability === true ||
-        profile.unemployed5of10 === true;
-
-      // ── Overall Score ─────────────────────────────────────────────────────
-      const prongsMetCount = (isProng1Met ? 1 : 0) + (isProng2Met ? 1 : 0);
-
-      const overallScore =
-        prongsMetCount === 2 ? 'HIGH_PROBABILITY'   :
-        prongsMetCount === 1 ? 'MEDIUM_PROBABILITY' :
-                               'LOW_PROBABILITY';
-
-      // ── Response ──────────────────────────────────────────────────────────
-      res.status(200).json({
-        client_id: clientId,
-        analysis: {
-          totalExpenses,
-          disposableIncome,
-          isProng1Met,
-          isProng2Met,
-          overallScore,
-        },
-      });
-    } catch (err) {
       next(err);
     }
   }
