@@ -28,10 +28,10 @@ export interface ClientRequest extends Request {
 }
 
 interface ClientJwtPayload {
-  sub:  string;   // clientId
-  role: string;   // must be 'client'
-  iat?: number;
-  exp?: number;
+  sub:   string;    // clientId
+  role?: string;    // 'client' when present; absent on tokens issued before the role claim was added
+  iat?:  number;
+  exp?:  number;
 }
 
 /**
@@ -74,8 +74,14 @@ export function requireClientJwt(
     return;
   }
 
-  // ── Role assertion — lawyer tokens cannot access client routes ────────────
-  if (payload.role !== 'client') {
+  // ── Role assertion — block lawyer tokens from client routes ─────────────
+  //
+  //   Accept: role === 'client'  (tokens issued after the role claim was added)
+  //   Accept: role is absent     (tokens issued by the original /clients/login
+  //                               and accept-invite before the role field existed)
+  //   Reject: any other role     (e.g. 'lawyer' tokens must not access this)
+  //
+  if (payload.role !== undefined && payload.role !== 'client') {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }

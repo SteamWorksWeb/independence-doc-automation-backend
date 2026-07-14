@@ -410,18 +410,17 @@ router.post(
         return;
       }
 
-      // ── Issue JWT ──────────────────────────────────────────────────────────
+      // ── Issue JWT ────────────────────────────────────────────────────────────
       //
-      //   Payload: { sub: clientId }  — minimal surface area.
-      //   The frontend should decode the token to get the ID, then call
-      //   the API for any additional profile data (don't trust JWT payload
-      //   for sensitive decisions — always re-validate server-side).
+      //   Payload: { sub: clientId, role: 'client' }
+      //   role: 'client' is required by requireClientJwt middleware so that
+      //   lawyer JWTs cannot be used to access client-protected routes.
       //
       const jwtSecret  = process.env.JWT_SECRET as string;
       const expiresIn  = (process.env.JWT_EXPIRES_IN ?? '7d') as jwt.SignOptions['expiresIn'];
 
       const token = jwt.sign(
-        { sub: client.id },
+        { sub: client.id, role: 'client' },
         jwtSecret,
         { expiresIn },
       );

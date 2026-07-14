@@ -299,13 +299,15 @@ router.post(
         `[auth] ✅ accept-invite: Account created for ${client.email} (clientId: ${client.id})`
       );
 
-      // ── Issue Client JWT ───────────────────────────────────────────────────
-      //   Payload: { sub: clientId } — no role claim; matches POST /clients/login shape.
+      // ── Issue Client JWT ────────────────────────────────────────────────────────────
+      //   Payload: { sub: clientId, role: 'client' }
+      //   role: 'client' is required by requireClientJwt middleware so that
+      //   lawyer JWTs cannot be used to access client routes.
       const jwtSecret = process.env.JWT_SECRET as string;
       const expiresIn = (process.env.JWT_EXPIRES_IN ?? '7d') as jwt.SignOptions['expiresIn'];
 
       const clientJwt = jwt.sign(
-        { sub: client.id },
+        { sub: client.id, role: 'client' },
         jwtSecret,
         { expiresIn },
       );
