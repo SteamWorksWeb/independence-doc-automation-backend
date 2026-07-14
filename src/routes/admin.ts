@@ -9,6 +9,8 @@
 //   GET    /api/v1/admin/clients/:id          — Fetch single client detail
 //   GET    /api/v1/admin/clients/:id/eligibility — Point-based eligibility score
 //   PATCH  /api/v1/admin/clients/:id/status   — Update client pipeline status
+//   GET    /api/v1/admin/clients/:id/messages  — Fetch conversation thread
+//   POST   /api/v1/admin/clients/:id/messages  — Send a message as LAWYER
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
@@ -549,6 +551,144 @@ router.delete(
       console.log(`[admin] 🚫 Invitation ${invitationId} for ${existing.email} revoked.`);
 
       res.status(200).json({ message: 'Invitation revoked successfully.' });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// GET /api/v1/admin/clients/:id/messages
+//
+// Fetches the full conversation thread for a specific client, ordered
+// chronologically (oldest first) so the frontend can render top-to-bottom.
+//
+// Each message includes:
+//   id, content, senderType ("LAWYER" | "CLIENT"), lawyerId (nullable),
+//   clientId, createdAt.
+//
+// Path param:
+//   :id — the client's UUID
+//
+// Responses:
+//   200  { messages: Message[] }   — Array of messages (may be empty)
+//   401  { error: string }         — Missing or invalid JWT
+//   403  { error: string }         — Valid JWT but role !== 'lawyer'
+//   404  { error: string }         — No client found for the given id
+//   500  { error: string }         — Global error handler
+// =============================================================================
+
+router.get(
+  '/clients/:id/messages',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      // ── Verify the client exists ────────────────────────────────────────────
+      const clientExists = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!clientExists) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      // ── Fetch all messages for this client thread ─────────────────────────────
+      const messages = await prisma.message.findMany({
+        where:   { clientId },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id:         true,
+          content:    true,
+          senderType: true,
+          lawyerId:   true,
+          clientId:   true,
+          createdAt:  true,
+        },
+      });
+
+      res.status(200).json({ messages });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// POST /api/v1/admin/clients/:id/messages
+//
+// Creates a new message in the client's conversation thread, sent by the
+// authenticated lawyer. senderType is hardcoded to "LAWYER"; lawyerId is
+// extracted from the JWT payload (req.lawyerId set by requireLawyerJwt).
+//
+// Path param:
+//   :id — the client's UUID
+//
+// Request body (JSON):
+//   { content: string }  — The message text (required, non-empty)
+//
+// Responses:
+//   201  { message: Message }  — Newly created message record
+//   400  { error: string }     — Missing or empty content
+//   401  { error: string }     — Missing or invalid JWT
+//   403  { error: string }     — Valid JWT but role !== 'lawyer'
+//   404  { error: string }     — No client found for the given id
+//   500  { error: string }     — Global error handler
+// =============================================================================
+
+router.post(
+  '/clients/:id/messages',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+      // lawyerId is attached to the request by requireLawyerJwt (payload.sub)
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const { content } = req.body as { content?: string };
+
+      // ── Validate content ──────────────────────────────────────────────────────
+      if (!content?.trim()) {
+        res.status(400).json({ error: 'Message content is required.' });
+        return;
+      }
+
+      // ── Verify the client exists ────────────────────────────────────────────
+      const clientExists = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!clientExists) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      // ── Create the message ────────────────────────────────────────────────────
+      const newMessage = await prisma.message.create({
+        data: {
+          content:    content.trim(),
+          senderType: 'LAWYER',      // hardcoded — this endpoint is lawyer-only
+          clientId,
+          lawyerId,
+        },
+        select: {
+          id:         true,
+          content:    true,
+          senderType: true,
+          lawyerId:   true,
+          clientId:   true,
+          createdAt:  true,
+        },
+      });
+
+      console.log(
+        `[admin] 💬 Lawyer ${lawyerId} sent message to client ${clientId} (msg ${newMessage.id})`
+      );
+
+      res.status(201).json({ message: newMessage });
     } catch (err) {
       next(err);
     }

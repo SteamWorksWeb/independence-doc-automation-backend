@@ -22,9 +22,14 @@
 //      - Email lookups (login, duplicate-check) on both models
 //      - lawyerId on Client (dashboard queries, case aggregations)
 //      - verificationToken on Client (token lookup during email verification)
+//      - clientId on Message (fetch all messages for a given client)
 //
 //   5. SNAKE_CASE TABLE NAMES — @@map() ensures DB tables use Postgres
-//      convention ("lawyers", "clients") while Prisma models use PascalCase.
+//      convention ("lawyers", "clients", "messages") while Prisma models use PascalCase.
+//
+//   6. MESSAGING — The Message model is a 1-to-many from Client (required) and
+//      an optional 1-to-many from Lawyer. onDelete: Cascade on Client means
+//      messages are auto-removed if the client record is deleted.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // STOP: Do NOT run `prisma migrate dev` without explicit approval.
@@ -67,6 +72,8 @@ model Lawyer {
   // onDelete: Restrict prevents accidental orphaning of Client records.
   clients      Client[]
   invitations  Invitation[]
+  // Messages sent by this lawyer to any of their clients.
+  messages     Message[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -133,6 +140,10 @@ model Client {
   // Created when the client begins the onboarding flow.
   // Null until the client starts intake.
   intakeProfile IntakeProfile?
+
+  // ── Messages (1-to-many) ───────────────────────────────────────────────────
+  // All messages in this client's conversation thread.
+  messages      Message[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -289,4 +300,59 @@ model Invitation {
 
   // ── Table name ────────────────────────────────────────────────────────────
   @@map("invitations")
+}
+
+// =============================================================================
+// MESSAGE
+//
+// A single message in the Lawyer ↔ Client secure conversation thread.
+//
+// senderType: discriminator string — either "LAWYER" or "CLIENT".
+//   This lets the frontend render messages on the correct side of the UI
+//   without a join, and avoids a polymorphic union type on sender.
+//
+// clientId (required): every message belongs to exactly one client thread.
+//   onDelete: Cascade — messages are removed if the client is deleted.
+//
+// lawyerId (optional): populated when senderType = "LAWYER".
+//   Null when senderType = "CLIENT" (client-originated messages).
+//   onDelete: SetNull — if a lawyer is ever removed, their messages are
+//   preserved in the thread (clientId still links them to the case).
+//
+// Ordering: always query ORDER BY createdAt ASC to render chronologically.
+// =============================================================================
+
+model Message {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id String @id @default(uuid())
+
+  // ── Content ────────────────────────────────────────────────────────────────
+  content    String   @db.Text
+
+  // ── Sender discriminator ────────────────────────────────────────────────────
+  // Valid values: "LAWYER" | "CLIENT"
+  senderType String
+
+  // ── Client relation (required) ─────────────────────────────────────────────
+  // Every message belongs to exactly one client conversation thread.
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // ── Lawyer relation (optional) ─────────────────────────────────────────────
+  // Populated only when senderType = "LAWYER".
+  // SetNull preserves message history if a lawyer account is removed.
+  lawyerId String?
+  lawyer   Lawyer? @relation(fields: [lawyerId], references: [id], onDelete: SetNull)
+
+  // ── Timestamps ─────────────────────────────────────────────────────────────
+  createdAt DateTime @default(now())
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  // clientId: primary query path — fetch all messages for a given client thread.
+  @@index([clientId])
+  // clientId + createdAt: supports paginated chronological thread queries.
+  @@index([clientId, createdAt])
+
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("messages")
 }
