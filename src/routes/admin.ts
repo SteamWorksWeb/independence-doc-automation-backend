@@ -36,6 +36,7 @@ import {
   ClientNotFoundError,
   IntakeProfileMissingError,
 } from '../services/eligibilityEngine';
+import { sendInviteEmail } from '../utils/email';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -379,8 +380,8 @@ router.patch(
 //   1. Lawyer provides the client's email address
 //   2. Backend generates a 32-byte crypto-random token (256 bits of entropy)
 //   3. Saves an Invitation record with a 7-day expiry window
-//   4. Logs the invite link to the console (email sending is mocked for now)
-//   5. Returns the token in the response for frontend testing
+//   4. Sends a branded invitation email via Resend to the client
+//   5. Returns the invitation record in the response
 //
 // Request body (JSON):
 //   {
@@ -388,7 +389,7 @@ router.patch(
 //   }
 //
 // Responses:
-//   201  { invitation: { id, email, token, expiresAt } }  — Invite created
+//   201  { invitation: { id, email, token, expiresAt } }  — Invite created + email sent
 //   400  { error: string }   — Missing or invalid email
 //   401  { error: string }   — Missing or invalid JWT (handled by router.use)
 //   403  { error: string }   — Valid JWT but role !== 'lawyer'
@@ -445,12 +446,14 @@ router.post(
         },
       });
 
-      // ── Mock email: log invite link to console ────────────────────────────
+      // ── Build invite link and dispatch email via Resend ───────────────────────────
       const inviteLink = `https://independence-doc-automation.vercel.app/login?token=${token}`;
-      console.log(`[admin] 📧 INVITE LINK for ${normalizedEmail}:`);
-      console.log(`[admin]    ${inviteLink}`);
 
-      // ── Return invitation (including token for frontend testing) ─────────
+      await sendInviteEmail(normalizedEmail, inviteLink);
+
+      console.log(`[admin] ✅ Invite email dispatched to ${normalizedEmail}`);
+
+      // ── Return invitation record ──────────────────────────────────────────────────────
       res.status(201).json({
         invitation,
         inviteLink,
