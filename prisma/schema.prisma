@@ -74,6 +74,8 @@ model Lawyer {
   invitations  Invitation[]
   // Messages sent by this lawyer to any of their clients.
   messages     Message[]
+  // Documents uploaded by this lawyer on behalf of a client.
+  documents    Document[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -144,6 +146,10 @@ model Client {
   // ── Messages (1-to-many) ───────────────────────────────────────────────────
   // All messages in this client's conversation thread.
   messages      Message[]
+
+  // ── Documents (1-to-many) ──────────────────────────────────────────────────
+  // All documents associated with this client's case archive.
+  documents     Document[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -355,4 +361,69 @@ model Message {
 
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("messages")
+}
+
+// =============================================================================
+// DOCUMENT
+//
+// A case document record in the client's archive.
+// Stores file metadata only — the actual binary is hosted externally
+// (initially a placeholder URL; S3 pre-signed URLs in a future release).
+//
+// uploadedBy: discriminator string — either "LAWYER" or "CLIENT".
+//   Lets the UI surface the correct uploader label without a join.
+//
+// clientId (required): every document belongs to exactly one client case.
+//   onDelete: Cascade — documents are removed if the client is deleted.
+//
+// lawyerId (optional): populated when uploadedBy = "LAWYER".
+//   SetNull — preserves document record if a lawyer is ever removed.
+//
+// Ordering: always query ORDER BY createdAt DESC to show newest first.
+// =============================================================================
+
+model Document {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id String @id @default(uuid())
+
+  // ── File metadata ──────────────────────────────────────────────────────────
+  // Original filename as uploaded (e.g. "tax_return_2024.pdf").
+  fileName  String
+
+  // URL to the stored file. Initially a placeholder; will become an S3
+  // pre-signed URL or CloudFront URL in the production storage release.
+  fileUrl   String
+
+  // MIME type of the uploaded file (e.g. "application/pdf", "image/png").
+  mimeType  String
+
+  // File size in bytes. Stored for display (e.g. "2.4 MB") and quota checks.
+  sizeBytes Int
+
+  // ── Uploader discriminator ────────────────────────────────────────────────
+  // Valid values: "LAWYER" | "CLIENT"
+  uploadedBy String
+
+  // ── Client relation (required) ─────────────────────────────────────────────
+  // Every document belongs to exactly one client case archive.
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // ── Lawyer relation (optional) ─────────────────────────────────────────────
+  // Populated when uploadedBy = "LAWYER".
+  // SetNull preserves document records if a lawyer account is removed.
+  lawyerId String?
+  lawyer   Lawyer? @relation(fields: [lawyerId], references: [id], onDelete: SetNull)
+
+  // ── Timestamps ─────────────────────────────────────────────────────────────
+  createdAt DateTime @default(now())
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  // clientId: primary query path — fetch all documents for a given client.
+  @@index([clientId])
+  // clientId + createdAt: supports date-sorted archive queries.
+  @@index([clientId, createdAt])
+
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("documents")
 }

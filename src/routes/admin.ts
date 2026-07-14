@@ -11,6 +11,8 @@
 //   PATCH  /api/v1/admin/clients/:id/status   — Update client pipeline status
 //   GET    /api/v1/admin/clients/:id/messages  — Fetch conversation thread
 //   POST   /api/v1/admin/clients/:id/messages  — Send a message as LAWYER
+//   GET    /api/v1/admin/clients/:id/documents — Fetch document archive
+//   POST   /api/v1/admin/clients/:id/documents — Register a document record
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
@@ -689,6 +691,177 @@ router.post(
       );
 
       res.status(201).json({ message: newMessage });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// GET /api/v1/admin/clients/:id/documents
+//
+// Returns all document records in a client's case archive, ordered newest-
+// first. No binary data is returned — only metadata (fileName, fileUrl,
+// mimeType, sizeBytes, uploadedBy, createdAt).
+//
+// Path param:
+//   :id — the client's UUID
+//
+// Responses:
+//   200  { documents: Document[] }  — Array (may be empty)
+//   401  { error: string }          — Missing or invalid JWT
+//   403  { error: string }          — Valid JWT but role !== 'lawyer'
+//   404  { error: string }          — No client found for the given id
+//   500  { error: string }          — Global error handler
+// =============================================================================
+
+router.get(
+  '/clients/:id/documents',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      // ── Verify client exists ───────────────────────────────────────────────
+      const clientExists = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!clientExists) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      // ── Fetch documents, newest first ──────────────────────────────────────────
+      const documents = await prisma.document.findMany({
+        where:   { clientId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id:         true,
+          fileName:   true,
+          fileUrl:    true,
+          mimeType:   true,
+          sizeBytes:  true,
+          uploadedBy: true,
+          lawyerId:   true,
+          clientId:   true,
+          createdAt:  true,
+        },
+      });
+
+      res.status(200).json({ documents });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// POST /api/v1/admin/clients/:id/documents
+//
+// Registers a new document record in the client's case archive.
+// The actual file binary is stored externally (S3 / future CDN); this
+// endpoint only persists the metadata and URL pointer.
+//
+// Path param:
+//   :id — the client's UUID
+//
+// Request body (JSON):
+//   {
+//     fileName:  string  — original filename (required)
+//     fileUrl:   string  — URL to the stored file (required)
+//     mimeType:  string  — MIME type (required)
+//     sizeBytes: number  — file size in bytes (required, positive integer)
+//   }
+//
+// Responses:
+//   201  { document: Document }  — Newly created document record
+//   400  { error: string }       — Missing or invalid body fields
+//   401  { error: string }       — Missing or invalid JWT
+//   403  { error: string }       — Valid JWT but role !== 'lawyer'
+//   404  { error: string }       — No client found for the given id
+//   500  { error: string }       — Global error handler
+// =============================================================================
+
+router.post(
+  '/clients/:id/documents',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+      const lawyerId = (req as LawyerRequest).lawyerId;
+
+      const {
+        fileName,
+        fileUrl,
+        mimeType,
+        sizeBytes,
+      } = req.body as {
+        fileName?:  string;
+        fileUrl?:   string;
+        mimeType?:  string;
+        sizeBytes?: number;
+      };
+
+      // ── Validate required fields ────────────────────────────────────────────
+      if (!fileName?.trim()) {
+        res.status(400).json({ error: 'fileName is required.' });
+        return;
+      }
+      if (!fileUrl?.trim()) {
+        res.status(400).json({ error: 'fileUrl is required.' });
+        return;
+      }
+      if (!mimeType?.trim()) {
+        res.status(400).json({ error: 'mimeType is required.' });
+        return;
+      }
+      if (typeof sizeBytes !== 'number' || !Number.isInteger(sizeBytes) || sizeBytes < 0) {
+        res.status(400).json({ error: 'sizeBytes must be a non-negative integer.' });
+        return;
+      }
+
+      // ── Verify client exists ───────────────────────────────────────────────
+      const clientExists = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!clientExists) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      // ── Create the document record ────────────────────────────────────────────
+      const newDocument = await prisma.document.create({
+        data: {
+          fileName:   fileName.trim(),
+          fileUrl:    fileUrl.trim(),
+          mimeType:   mimeType.trim(),
+          sizeBytes,
+          uploadedBy: 'LAWYER',   // hardcoded — this endpoint is lawyer-only
+          clientId,
+          lawyerId,
+        },
+        select: {
+          id:         true,
+          fileName:   true,
+          fileUrl:    true,
+          mimeType:   true,
+          sizeBytes:  true,
+          uploadedBy: true,
+          lawyerId:   true,
+          clientId:   true,
+          createdAt:  true,
+        },
+      });
+
+      console.log(
+        `[admin] 📄 Lawyer ${lawyerId} uploaded document "${fileName}" for client ${clientId} (doc ${newDocument.id})`
+      );
+
+      res.status(201).json({ document: newDocument });
     } catch (err) {
       next(err);
     }
