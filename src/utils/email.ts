@@ -9,7 +9,10 @@
 // Security notes:
 //   - RESEND_API_KEY is read exclusively from env — never hardcoded.
 //   - The magic-link token is a one-time-use UUID hashed server-side.
-//   - EMAIL_FROM_ADDRESS controls the sender (e.g. "portal@theindependencelaw.com").
+//   - The 'from' address is hardcoded to the firm's verified Resend domain:
+//     apply@theindependencelaw.com
+//     (Do NOT change this to onboarding@resend.dev — that sandbox address
+//      silently fails for all recipients except the API key owner.)
 //
 // Template origin: Independence Law brand palette — navy / gold / off-white.
 // =============================================================================
@@ -20,14 +23,15 @@ import { Resend } from 'resend';
 // These are validated at server startup in server.ts. We re-check here so
 // the utility can also be imported safely in tests / scripts.
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM_ADDRESS;
 
 if (!RESEND_API_KEY) {
   throw new Error('[email] FATAL: RESEND_API_KEY environment variable is not set.');
 }
-if (!EMAIL_FROM_ADDRESS) {
-  throw new Error('[email] FATAL: EMAIL_FROM_ADDRESS environment variable is not set.');
-}
+
+// Hardcoded to the firm's verified Resend domain.
+// Do NOT revert to onboarding@resend.dev (Resend sandbox — silently fails
+// for all recipients who are not the API-key owner).
+const FROM_ADDRESS = 'The Independence Law Firm <apply@theindependencelaw.com>';
 
 // ── Resend client (singleton) ─────────────────────────────────────────────────
 const resend = new Resend(RESEND_API_KEY);
@@ -54,19 +58,34 @@ export async function sendVerificationEmail(
 
   const html = buildVerificationEmailHtml(verifyUrl);
 
-  const { error } = await resend.emails.send({
-    from: EMAIL_FROM_ADDRESS as string,
-    to: toEmail,
-    subject: 'Verify your Independence Law Portal access',
-    html,
-  });
+  let sendError: unknown;
 
-  if (error) {
-    console.error('[email] Resend API error:', error);
-    throw new Error(`[email] Failed to send verification email: ${error.message}`);
+  try {
+    const { error } = await resend.emails.send({
+      from:    FROM_ADDRESS,
+      to:      toEmail,
+      subject: 'Verify your Independence Law Portal access',
+      html,
+    });
+
+    if (error) {
+      sendError = error;
+    }
+  } catch (err) {
+    console.error('RESEND API ERROR:', err);
+    throw new Error(`[email] Unexpected error calling Resend SDK: ${String(err)}`);
   }
 
-  console.log(`[email] Verification email dispatched to ${toEmail}`);
+  if (sendError) {
+    console.error('RESEND API ERROR:', sendError);
+    throw new Error(
+      `[email] Failed to send verification email: ${
+        (sendError as { message?: string }).message ?? String(sendError)
+      }`
+    );
+  }
+
+  console.log(`[email] Verification email dispatched to ${toEmail} via ${FROM_ADDRESS}`);
 }
 
 // =============================================================================
