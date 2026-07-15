@@ -14,6 +14,7 @@
 //   GET    /api/v1/admin/clients/:id/documents — Fetch document archive
 //   POST   /api/v1/admin/clients/:id/documents — Register a document record
 //   GET    /api/v1/admin/cases/:id            — Fetch single case (client + documents + intake)
+//   GET    /api/v1/admin/documents            — Fetch ALL documents (global archive, newest first)
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
@@ -956,6 +957,52 @@ router.get(
       console.log(`[admin] 📂 Fetched case details for case/client ${caseId}`);
 
       res.status(200).json({ case: caseRecord });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// GET /api/v1/admin/documents
+//
+// Global document archive — returns every Document record across all clients,
+// ordered newest-first. Designed for the firm-wide Documents Archive page.
+//
+// Each document includes the associated client's `id` and `name` so the
+// frontend can link back to the correct client profile without a secondary
+// lookup. No private client fields (email, passwordHash, etc.) are exposed.
+//
+// Responses:
+//   200  { documents: (Document & { client: { id, name } })[] }
+//         — Flat array of all document records with embedded client stub.
+//           Array is empty when no documents have been uploaded yet.
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.get(
+  '/documents',
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+
+      const documents = await prisma.document.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+          client: {
+            select: {
+              id:   true,
+              name: true,
+            },
+          },
+        },
+      });
+
+      console.log(`[admin] 🗂️  Fetched global document archive (${documents.length} records)`);
+
+      res.status(200).json({ documents });
     } catch (err) {
       next(err);
     }
