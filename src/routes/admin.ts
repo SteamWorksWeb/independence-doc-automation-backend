@@ -13,9 +13,11 @@
 //   POST   /api/v1/admin/clients/:id/messages  — Send a message as LAWYER
 //   GET    /api/v1/admin/clients/:id/documents — Fetch document archive
 //   POST   /api/v1/admin/clients/:id/documents — Register a document record
+//   GET    /api/v1/admin/cases/:id            — Fetch single case (client + documents + intake)
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
+
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
 //   - Only JWTs with role: 'lawyer' are accepted; all others receive 403.
@@ -871,4 +873,94 @@ router.post(
   }
 );
 
+// =============================================================================
+// GET /api/v1/admin/cases/:id
+//
+// Fetches a single case record by its ID for the War Room / Case Detail page.
+//
+// In this schema, a "case" is represented by the Client record — the client IS
+// the case. This endpoint surfaces the client's identity fields alongside their
+// complete document archive and intake profile so the frontend War Room can
+// populate in a single request, with no additional round-trips.
+//
+// Included relations:
+//   - documents    — all case files uploaded by the lawyer or the client,
+//                    ordered newest-first (matches the document archive UI)
+//   - intakeProfile — the DOJ intake questionnaire answers; null if the client
+//                     has not yet started the intake flow
+//
+// Path param:
+//   :id — the case/client UUID
+//
+// Responses:
+//   200  { case: { id, name, email, status, isVerified, createdAt,
+//                  intakeProfile, documents } }
+//         — Full case record with related client info and document archive.
+//           `intakeProfile` is null if intake has not been started.
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   404  { error: string }   — No case found for the given id
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.get(
+  '/cases/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma  = getPrisma();
+      // String() cast: Express types params as string | string[]; Prisma
+      // where clause requires a plain string. Safe because Express always
+      // resolves named route params to a single string value.
+      const caseId  = String(req.params.id);
+
+      // A "case" in this system is the Client record. We fetch the client by
+      // its UUID and include both relations the War Room UI needs:
+      //   • documents    — the case file archive (newest first)
+      //   • intakeProfile — DOJ questionnaire answers (null if not started)
+      // Password hash is explicitly excluded — only safe fields are selected.
+      const caseRecord = await prisma.client.findUnique({
+        where: { id: caseId },
+        select: {
+          id:         true,
+          name:       true,
+          email:      true,
+          status:     true,
+          isVerified: true,
+          createdAt:  true,
+          // Include the full intake questionnaire so the War Room tabbed view
+          // can display DOJ form data without a second request.
+          intakeProfile: true,
+          // Include all attached documents, newest first.
+          documents: {
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id:         true,
+              fileName:   true,
+              fileUrl:    true,
+              mimeType:   true,
+              sizeBytes:  true,
+              uploadedBy: true,
+              lawyerId:   true,
+              clientId:   true,
+              createdAt:  true,
+            },
+          },
+        },
+      });
+
+      if (!caseRecord) {
+        res.status(404).json({ error: 'Case not found.' });
+        return;
+      }
+
+      console.log(`[admin] 📂 Fetched case details for case/client ${caseId}`);
+
+      res.status(200).json({ case: caseRecord });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
+
