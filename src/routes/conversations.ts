@@ -430,4 +430,73 @@ router.post(
   }
 );
 
+// =============================================================================
+// POST /api/v1/conversations/:id/read
+//
+// Marks all messages in a conversation as read for the requesting staff member.
+//
+// For each non-deleted message in the thread this route inserts a MessageRead
+// record keyed on (messageId, userId). skipDuplicates: true prevents a PK
+// conflict when the staff member has already read some or all messages —
+// this endpoint is fully idempotent.
+//
+// Path params:
+//   :id  — Conversation id
+//
+// Responses:
+//   200  { markedRead: number }  — Count of newly inserted read receipts
+//   401  { error: string }       — Missing or invalid JWT
+//   403  { error: string }       — Valid JWT but role !== 'lawyer'
+//   404  { error: string }       — Conversation not found
+//   500  { error: string }       — Global error handler
+// =============================================================================
+
+router.post(
+  '/:id/read',
+  canAccessConversation,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const id       = String(req.params['id']);
+      const prisma   = getPrisma();
+
+      // ── Verify the conversation exists ───────────────────────────────────
+      const conversation = await prisma.conversation.findUnique({
+        where:  { id },
+        select: { id: true },
+      });
+
+      if (!conversation) {
+        res.status(404).json({ error: 'Conversation not found' });
+        return;
+      }
+
+      // ── Fetch all non-deleted message IDs in this conversation ───────────
+      const messages = await prisma.message.findMany({
+        where:  { conversationId: id, deletedAt: null },
+        select: { id: true },
+      });
+
+      // ── Bulk-insert read receipts; skipDuplicates prevents PK conflicts ──
+      //
+      // MessageRead has a composite PK of (messageId, userId). If any record
+      // already exists for this (message, lawyer) pair it is silently skipped —
+      // never throws, never double-inserts (D4).
+      const result = await prisma.messageRead.createMany({
+        data: messages.map((msg) => ({
+          messageId: msg.id,
+          userId:    lawyerId,
+          // readAt omitted — Prisma uses @default(now())
+        })),
+        skipDuplicates: true,
+      });
+
+      res.status(200).json({ markedRead: result.count });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
+
