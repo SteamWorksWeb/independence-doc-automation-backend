@@ -1071,7 +1071,7 @@ router.post(
       const prisma   = getPrisma();
       const lawyerId = (req as LawyerRequest).lawyerId;
 
-      // ── Destructure payload ─────────────────────────────────────────────────
+      // â”€â”€ Destructure payload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const {
         firstName,
         lastName,
@@ -1116,7 +1116,7 @@ router.post(
         lastAttendedSchool?:     string;
       };
 
-      // ── Validate required fields ────────────────────────────────────────────
+      // â”€â”€ Validate required fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       if (!firstName?.trim()) {
         res.status(400).json({ error: 'firstName is required.' });
         return;
@@ -1137,7 +1137,57 @@ router.post(
       const normalizedEmail = email.trim().toLowerCase();
       const fullName        = `${firstName.trim()} ${lastName.trim()}`;
 
-      // ── Upsert Client ───────────────────────────────────────────────────────
+      // â”€â”€ Strict type coercion helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // The frontend wizard may send numbers as numeric strings (e.g. "1200.50")
+      // or booleans as "Yes"/"No" dropdown strings. Prisma will throw on type
+      // mismatches, so we coerce everything explicitly here.
+
+      /**
+       * Safely parse a value to Float.
+       * Returns null if the value is absent, an empty string, or NaN.
+       */
+      function toFloat(val: unknown): number | null {
+        if (val === undefined || val === null || val === '') return null;
+        const n = parseFloat(String(val));
+        return isNaN(n) ? null : n;
+      }
+
+      /**
+       * Safely parse a value to Int.
+       * Returns null if the value is absent, an empty string, or NaN.
+       */
+      function toInt(val: unknown): number | null {
+        if (val === undefined || val === null || val === '') return null;
+        const n = parseInt(String(val), 10);
+        return isNaN(n) ? null : n;
+      }
+
+      /**
+       * Coerce a value to Boolean.
+       * Accepts: true/false (native), "Yes"/"No" (dropdown strings),
+       *          "true"/"false" (JSON-serialised strings).
+       * Returns null if the value is absent or unrecognised.
+       */
+      function toBool(val: unknown): boolean | null {
+        if (val === undefined || val === null || val === '') return null;
+        if (typeof val === 'boolean') return val;
+        const s = String(val).toLowerCase().trim();
+        if (s === 'yes' || s === 'true')  return true;
+        if (s === 'no'  || s === 'false') return false;
+        return null;
+      }
+
+      /**
+       * Safely parse a date string to a Date object.
+       * Returns null if the value is absent or produces an invalid Date.
+       */
+      function toDate(val: unknown): Date | null {
+        if (val === undefined || val === null || val === '') return null;
+        const d = new Date(String(val));
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      // â”€â”€ Upsert Client â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // Creates the client if they don't exist (using the JWT lawyerId);
       // updates their display name if they already do.
       const client = await prisma.client.upsert({
@@ -1145,7 +1195,7 @@ router.post(
         create: {
           name:         fullName,
           email:        normalizedEmail,
-          // passwordHash is empty here — this client is created by the lawyer
+          // passwordHash is empty here â€” this client is created by the lawyer
           // via the wizard, not through the client self-registration portal.
           passwordHash: '',
           lawyerId,
@@ -1162,39 +1212,61 @@ router.post(
         },
       });
 
-      // ── Create DischargeSnapshot ────────────────────────────────────────────
+      // â”€â”€ Create DischargeSnapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // All optional numeric fields are coerced through toFloat()/toInt() so
+      // that empty strings and undefined values become null rather than NaN.
+      // All boolean fields are coerced through toBool() so that "Yes"/"No"
+      // dropdown strings are converted to proper Prisma Boolean values.
       const snapshot = await prisma.dischargeSnapshot.create({
         data: {
           clientId:               client.id,
           hasFederalLoans:        hasFederalLoans.trim(),
-          principalBalance:       principalBalance       ?? undefined,
-          householdSize:          householdSize          ?? undefined,
-          monthlyGrossIncome:     monthlyGrossIncome     ?? undefined,
-          monthlyTakeHomePay:     monthlyTakeHomePay     ?? undefined,
-          additionalIncome:       additionalIncome       ?? undefined,
-          housingExpenses:        housingExpenses        ?? undefined,
-          transportationExpenses: transportationExpenses ?? undefined,
-          dependentCareExpenses:  dependentCareExpenses  ?? undefined,
-          isEmployed:             isEmployed             ?? undefined,
-          workInFieldOfStudy:     workInFieldOfStudy     ?? undefined,
-          unemployed5PlusYears:   unemployed5PlusYears   ?? undefined,
-          hasDisability:          hasDisability          ?? undefined,
-          didGraduate:            didGraduate            ?? undefined,
-          schoolClosed:           schoolClosed           ?? undefined,
-          is65OrOlder:            is65OrOlder            ?? undefined,
-          lastAttendedSchool:     lastAttendedSchool
-            ? new Date(lastAttendedSchool)
-            : undefined,
+          principalBalance:       toFloat(principalBalance)       ?? undefined,
+          householdSize:          toInt(householdSize)            ?? undefined,
+          monthlyGrossIncome:     toFloat(monthlyGrossIncome)     ?? undefined,
+          monthlyTakeHomePay:     toFloat(monthlyTakeHomePay)     ?? undefined,
+          additionalIncome:       toFloat(additionalIncome)       ?? undefined,
+          housingExpenses:        toFloat(housingExpenses)        ?? undefined,
+          transportationExpenses: toFloat(transportationExpenses) ?? undefined,
+          dependentCareExpenses:  toFloat(dependentCareExpenses)  ?? undefined,
+          isEmployed:             toBool(isEmployed)              ?? undefined,
+          workInFieldOfStudy:     toBool(workInFieldOfStudy)      ?? undefined,
+          unemployed5PlusYears:   toBool(unemployed5PlusYears)    ?? undefined,
+          hasDisability:          toBool(hasDisability)           ?? undefined,
+          didGraduate:            toBool(didGraduate)             ?? undefined,
+          schoolClosed:           toBool(schoolClosed)            ?? undefined,
+          is65OrOlder:            toBool(is65OrOlder)             ?? undefined,
+          lastAttendedSchool:     toDate(lastAttendedSchool)      ?? undefined,
           // isDischargeable stays null; status stays "Incomplete" (schema defaults)
         },
       });
 
       console.log(
-        `[admin] 📋 DischargeSnapshot ${snapshot.id} created for client ${client.id} (${normalizedEmail})`
+        `[admin] ðŸ“‹ DischargeSnapshot ${snapshot.id} created for client ${client.id} (${normalizedEmail})`
       );
 
       res.status(201).json({ client, snapshot });
     } catch (err) {
+      // â”€â”€ Aggressive error logging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // Log the full request body alongside the raw Prisma error so we can
+      // diagnose type-mismatch or constraint violations without guessing.
+      console.error("Prisma Error payload:", req.body, err);
+
+      // â”€â”€ Return 400 for Prisma validation errors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // PrismaClientValidationError indicates a type mismatch or missing required
+      // field â€” this is a client-side data problem, not a server fault.
+      const errName = (err as Error)?.constructor?.name ?? '';
+      if (
+        errName === 'PrismaClientValidationError' ||
+        errName === 'PrismaClientKnownRequestError'
+      ) {
+        res.status(400).json({
+          error: 'Validation error: invalid or missing fields in discharge snapshot payload.',
+          detail: (err as Error).message,
+        });
+        return;
+      }
+
       next(err);
     }
   }
