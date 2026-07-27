@@ -19,6 +19,7 @@
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
 //   POST   /api/v1/admin/discharge-snapshots  — Submit discharge wizard payload (upsert client + create snapshot)
+//   DELETE /api/v1/admin/discharge-snapshots/:id — Permanently delete a snapshot and its parent client record
 //   POST   /api/v1/admin/borrowers/invite     — Invite a borrower (pre-client) to the Discharge Snapshot pipeline
 
 // Security model:
@@ -1433,6 +1434,67 @@ router.post(
         intakeLink,
       });
 
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// DELETE /api/v1/admin/discharge-snapshots/:id
+//
+// Permanently removes a DischargeSnapshot and its associated parent Client
+// record from the database. Because our architecture equates a Borrower with
+// a Client, deleting only the snapshot would leave an orphaned Client row.
+// A Prisma transaction is used to delete both atomically — either both
+// records are removed or neither is.
+//
+// Path param:
+//   :id — the DischargeSnapshot UUID
+//
+// Delete order inside the transaction (respects FK constraints):
+//   1. DischargeSnapshot  (child — references clientId)
+//   2. Client             (parent — id === snapshot.clientId)
+//
+// Responses:
+//   200  { message: 'Borrower permanently deleted' }  — Both records removed
+//   404  { error: string }   — No snapshot found for the given id
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.delete(
+  '/discharge-snapshots/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma     = getPrisma();
+      const snapshotId = String(req.params.id);
+
+      // ── Locate the snapshot to retrieve its parent clientId ─────────────────
+      const snapshot = await prisma.dischargeSnapshot.findUnique({
+        where:  { id: snapshotId },
+        select: { id: true, clientId: true },
+      });
+
+      if (!snapshot) {
+        res.status(404).json({ error: 'Discharge snapshot not found.' });
+        return;
+      }
+
+      // ── Atomically delete snapshot + parent client ──────────────────────────
+      // Order matters: delete the child (DischargeSnapshot) first so the FK
+      // constraint on clientId is cleared before we remove the parent (Client).
+      await prisma.$transaction([
+        prisma.dischargeSnapshot.delete({ where: { id: snapshotId } }),
+        prisma.client.delete({ where: { id: snapshot.clientId } }),
+      ]);
+
+      console.log(
+        `[admin] 🗑️  DischargeSnapshot ${snapshotId} and parent Client ${snapshot.clientId} permanently deleted.`
+      );
+
+      res.status(200).json({ message: 'Borrower permanently deleted' });
     } catch (err) {
       next(err);
     }
