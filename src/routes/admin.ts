@@ -1043,15 +1043,13 @@ router.get(
         orderBy: { updatedAt: 'desc' },
         include: {
           // Include the client record so the frontend table can render the borrower
-          // name (client.name) and contact info alongside each snapshot row.
-          // NOTE: phone is intentionally omitted — the column exists in schema.prisma
-          // but has not yet been migrated to the live database. Re-add once the
-          // migration `prisma migrate deploy` has been applied.
+          // name (client.name), phone, and contact info alongside each snapshot row.
           client: {
             select: {
               id: true,
               name: true,
               email: true,
+              phone: true,
               status: true,
               createdAt: true,
             },
@@ -1270,9 +1268,7 @@ router.post(
         data: {
           name:         fullName,
           email:        normalizedEmail,
-          // NOTE: phone is intentionally omitted — the column exists in schema.prisma
-          // but has not yet been migrated to the live database. Re-add once the
-          // migration `prisma migrate deploy` has been applied.
+          phone:        phone?.trim(),
           passwordHash: '',
           lawyerId,
         },
@@ -1280,6 +1276,7 @@ router.post(
           id:        true,
           name:      true,
           email:     true,
+          phone:     true,
           status:    true,
           createdAt: true,
         },
