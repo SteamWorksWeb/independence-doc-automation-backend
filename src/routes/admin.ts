@@ -1579,4 +1579,149 @@ router.patch(
   }
 );
 
+// =============================================================================
+// PUT /api/v1/admin/discharge-snapshots/:id
+//
+// Updates an existing DischargeSnapshot record with new wizard data.
+//
+// Path param:
+//   :id — the DischargeSnapshot UUID
+//
+// Responses:
+//   200  { snapshot: DischargeSnapshot }  — Updated snapshot record
+//   400  { error: string }               — Missing fields or validation error
+//   401  { error: string }               — Missing or invalid JWT
+//   403  { error: string }               — Valid JWT but role !== 'lawyer'
+//   404  { error: string }               — No snapshot found for the given id
+//   500  { error: string }               — Global error handler
+// =============================================================================
+
+router.put(
+  '/discharge-snapshots/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma     = getPrisma();
+      const snapshotId = String(req.params.id);
+
+      const {
+        hasFederalLoans,
+        principalBalance,
+        householdSize,
+        monthlyGrossIncome,
+        monthlyTakeHomePay,
+        additionalIncome,
+        housingExpenses,
+        transportationExpenses,
+        dependentCareExpenses,
+        isEmployed,
+        workInFieldOfStudy,
+        unemployed5PlusYears,
+        hasDisability,
+        didGraduate,
+        schoolClosed,
+        is65OrOlder,
+        lastAttendedSchool,
+      } = req.body as {
+        hasFederalLoans?:        string;
+        principalBalance?:       number;
+        householdSize?:          number;
+        monthlyGrossIncome?:     number;
+        monthlyTakeHomePay?:     number;
+        additionalIncome?:       number;
+        housingExpenses?:        number;
+        transportationExpenses?: number;
+        dependentCareExpenses?:  number;
+        isEmployed?:             boolean;
+        workInFieldOfStudy?:     boolean;
+        unemployed5PlusYears?:   boolean;
+        hasDisability?:          boolean;
+        didGraduate?:            boolean;
+        schoolClosed?:           boolean;
+        is65OrOlder?:            boolean;
+        lastAttendedSchool?:     string;
+      };
+
+      // ── Strict type coercion helpers ─────────────────────────────────────────
+      function toFloat(val: unknown): number | null {
+        if (val === undefined || val === null || val === '') return null;
+        const n = parseFloat(String(val));
+        return isNaN(n) ? null : n;
+      }
+
+      function toInt(val: unknown): number | null {
+        if (val === undefined || val === null || val === '') return null;
+        const n = parseInt(String(val), 10);
+        return isNaN(n) ? null : n;
+      }
+
+      function toBool(val: unknown): boolean | null {
+        if (val === undefined || val === null || val === '') return null;
+        if (typeof val === 'boolean') return val;
+        const s = String(val).toLowerCase().trim();
+        if (s === 'yes' || s === 'true')  return true;
+        if (s === 'no'  || s === 'false') return false;
+        return null;
+      }
+
+      function toDate(val: unknown): Date | null {
+        if (val === undefined || val === null || val === '') return null;
+        const d = new Date(String(val));
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      // ── Verify the snapshot exists ──────────────────────────────────────────
+      const existing = await prisma.dischargeSnapshot.findUnique({
+        where:  { id: snapshotId },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Discharge snapshot not found.' });
+        return;
+      }
+
+      // ── Persist the update ──────────────────────────────────────────────────
+      const updatedSnapshot = await prisma.dischargeSnapshot.update({
+        where: { id: snapshotId },
+        data: {
+          hasFederalLoans:        hasFederalLoans?.trim()         ?? undefined,
+          principalBalance:       toFloat(principalBalance)       ?? undefined,
+          householdSize:          toInt(householdSize)            ?? undefined,
+          monthlyGrossIncome:     toFloat(monthlyGrossIncome)     ?? undefined,
+          monthlyTakeHomePay:     toFloat(monthlyTakeHomePay)     ?? undefined,
+          additionalIncome:       toFloat(additionalIncome)       ?? undefined,
+          housingExpenses:        toFloat(housingExpenses)        ?? undefined,
+          transportationExpenses: toFloat(transportationExpenses) ?? undefined,
+          dependentCareExpenses:  toFloat(dependentCareExpenses)  ?? undefined,
+          isEmployed:             toBool(isEmployed)              ?? undefined,
+          workInFieldOfStudy:     toBool(workInFieldOfStudy)      ?? undefined,
+          unemployed5PlusYears:   toBool(unemployed5PlusYears)    ?? undefined,
+          hasDisability:          toBool(hasDisability)           ?? undefined,
+          didGraduate:            toBool(didGraduate)             ?? undefined,
+          schoolClosed:           toBool(schoolClosed)            ?? undefined,
+          is65OrOlder:            toBool(is65OrOlder)             ?? undefined,
+          lastAttendedSchool:     toDate(lastAttendedSchool)      ?? undefined,
+        },
+      });
+
+      console.log(`[admin] 📋 DischargeSnapshot ${snapshotId} updated via PUT`);
+
+      res.status(200).json({ snapshot: updatedSnapshot });
+    } catch (err) {
+      const errName = (err as Error)?.constructor?.name ?? '';
+      if (
+        errName === 'PrismaClientValidationError' ||
+        errName === 'PrismaClientKnownRequestError'
+      ) {
+        res.status(400).json({
+          error: 'Validation error: invalid or missing fields in discharge snapshot payload.',
+          detail: (err as Error).message,
+        });
+        return;
+      }
+      next(err);
+    }
+  }
+);
+
 export default router;
