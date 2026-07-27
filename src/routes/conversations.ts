@@ -171,7 +171,12 @@ router.use(requireLawyerJwt);
 // =============================================================================
 // GET /api/v1/conversations
 //
-// Returns all conversation threads for the staff dashboard.
+// Returns conversation threads for the staff dashboard.
+//
+// Query params:
+//   borrowerId  (optional) — When supplied, returns ONLY the conversation(s)
+//               that belong to the borrower with this id. When omitted, all
+//               conversations are returned (existing behaviour).
 //
 // Each record includes:
 //   - id, status, assignedToId, createdAt, updatedAt
@@ -193,11 +198,21 @@ router.get(
   canAccessConversation,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const lawyerId = (req as LawyerRequest).lawyerId;
-      const prisma = getPrisma();
+      const lawyerId   = (req as LawyerRequest).lawyerId;
+      const prisma     = getPrisma();
+
+      // ── Optional borrower filter ─────────────────────────────────────────
+      // If the caller passes ?borrowerId=<id> we scope the query to that
+      // borrower only. An absent or empty value returns all conversations.
+      const rawBorrowerId = req.query['borrowerId'];
+      const borrowerId    =
+        typeof rawBorrowerId === 'string' && rawBorrowerId.trim() !== ''
+          ? rawBorrowerId.trim()
+          : undefined;
 
       const conversations = await prisma.conversation.findMany({
         orderBy: { updatedAt: 'desc' },
+        ...(borrowerId ? { where: { borrowerId } } : {}),
         select: {
           id:           true,
           status:       true,
