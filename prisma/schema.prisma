@@ -70,12 +70,12 @@ model Lawyer {
   // ── Relations ──────────────────────────────────────────────────────────────
   // A Lawyer supervises many Clients.
   // onDelete: Restrict prevents accidental orphaning of Client records.
-  clients      Client[]
-  invitations  Invitation[]
+  clients     Client[]
+  invitations Invitation[]
   // Messages sent by this lawyer to any of their clients.
-  messages     Message[]
+  messages    Message[]
   // Documents uploaded by this lawyer on behalf of a client.
-  documents    Document[]
+  documents   Document[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -143,13 +143,18 @@ model Client {
   // Null until the client starts intake.
   intakeProfile IntakeProfile?
 
+  // ── Discharge Snapshots (1-to-many) ────────────────────────────────────────
+  // Each wizard submission creates one DischargeSnapshot.
+  // A client may have multiple snapshots over the life of their case.
+  dischargeSnapshots DischargeSnapshot[]
+
   // ── Messages (1-to-many) ───────────────────────────────────────────────────
   // All messages in this client's conversation thread.
-  messages      Message[]
+  messages Message[]
 
   // ── Documents (1-to-many) ──────────────────────────────────────────────────
   // All documents associated with this client's case archive.
-  documents     Document[]
+  documents Document[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -271,7 +276,7 @@ model IntakeProfile {
 
 model Invitation {
   // ── Identity ───────────────────────────────────────────────────────────────
-  id    String @id @default(uuid())
+  id String @id @default(uuid())
 
   // ── Invite target ──────────────────────────────────────────────────────────
   // The email address of the client being invited.
@@ -296,14 +301,13 @@ model Invitation {
   // ── Lawyer relation ───────────────────────────────────────────────────────
   // The lawyer who created this invitation.
   // Used at client registration to satisfy Client.lawyerId (non-nullable).
-  lawyerId  String
-  lawyer    Lawyer   @relation(fields: [lawyerId], references: [id], onDelete: Restrict)
+  lawyerId String
+  lawyer   Lawyer @relation(fields: [lawyerId], references: [id], onDelete: Restrict)
 
   // ── Indexes ───────────────────────────────────────────────────────────────
   // Email index: lookup invitations by client email address.
   @@index([email])
   @@index([lawyerId])
-
   // ── Table name ────────────────────────────────────────────────────────────
   @@map("invitations")
 }
@@ -333,7 +337,7 @@ model Message {
   id String @id @default(uuid())
 
   // ── Content ────────────────────────────────────────────────────────────────
-  content    String   @db.Text
+  content String @db.Text
 
   // ── Sender discriminator ────────────────────────────────────────────────────
   // Valid values: "LAWYER" | "CLIENT"
@@ -358,7 +362,6 @@ model Message {
   @@index([clientId])
   // clientId + createdAt: supports paginated chronological thread queries.
   @@index([clientId, createdAt])
-
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("messages")
 }
@@ -388,14 +391,14 @@ model Document {
 
   // ── File metadata ──────────────────────────────────────────────────────────
   // Original filename as uploaded (e.g. "tax_return_2024.pdf").
-  fileName  String
+  fileName String
 
   // URL to the stored file. Initially a placeholder; will become an S3
   // pre-signed URL or CloudFront URL in the production storage release.
-  fileUrl   String
+  fileUrl String
 
   // MIME type of the uploaded file (e.g. "application/pdf", "image/png").
-  mimeType  String
+  mimeType String
 
   // File size in bytes. Stored for display (e.g. "2.4 MB") and quota checks.
   sizeBytes Int
@@ -423,7 +426,84 @@ model Document {
   @@index([clientId])
   // clientId + createdAt: supports date-sorted archive queries.
   @@index([clientId, createdAt])
-
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("documents")
+}
+
+// =============================================================================
+// DISCHARGE SNAPSHOT
+//
+// A single wizard submission from the admin 7-step discharge-eligibility wizard.
+// Stores the full financial and demographic payload collected by the frontend
+// IntakeWizard component for discharge analysis.
+//
+// Relation:
+//   1-to-many from Client — a client can accumulate multiple snapshots
+//   (e.g. re-runs after circumstances change). The latest snapshot is the
+//   active one; historical snapshots serve as an audit trail.
+//   onDelete: Cascade — snapshots are removed if the Client is deleted.
+//
+// isDischargeable:
+//   Null until an eligibility analysis run sets it. null = "not yet analyzed";
+//   true = dischargeable; false = not dischargeable.
+//
+// status:
+//   "Incomplete" — wizard submitted but analysis not yet run.
+//   "Analyzed"   — isDischargeable has been set by the engine.
+// =============================================================================
+
+model DischargeSnapshot {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id String @id @default(uuid())
+
+  // ── 1-to-many link to Client ──────────────────────────────────────────────
+  // Not @unique — a client may have multiple snapshots over time.
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // ── Loan information ───────────────────────────────────────────────────────
+  hasFederalLoans  String // "yes" | "no" | "unsure"
+  principalBalance Float?
+
+  // ── Household & Income ─────────────────────────────────────────────────────
+  householdSize      Int?
+  monthlyGrossIncome Float?
+  monthlyTakeHomePay Float?
+  additionalIncome   Float?
+
+  // ── Monthly Expenses ───────────────────────────────────────────────────────
+  housingExpenses        Float?
+  transportationExpenses Float?
+  dependentCareExpenses  Float?
+
+  // ── Employment & Circumstance Flags ───────────────────────────────────────
+  isEmployed           Boolean?
+  workInFieldOfStudy   Boolean?
+  unemployed5PlusYears Boolean?
+  hasDisability        Boolean?
+
+  // ── Education & School Flags ───────────────────────────────────────────────
+  didGraduate        Boolean?
+  schoolClosed       Boolean?
+  is65OrOlder        Boolean?
+  lastAttendedSchool DateTime?
+
+  // ── Analysis result ────────────────────────────────────────────────────────
+  // Null until the eligibility engine processes this snapshot.
+  isDischargeable Boolean?
+
+  // ── Workflow status ────────────────────────────────────────────────────────
+  status String @default("Incomplete")
+
+  // ── Timestamps ─────────────────────────────────────────────────────────────
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  // clientId: primary query path — fetch all snapshots for a given client.
+  @@index([clientId])
+  // clientId + createdAt: supports date-sorted snapshot queries.
+  @@index([clientId, createdAt])
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("discharge_snapshots")
 }

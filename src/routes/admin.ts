@@ -18,6 +18,7 @@
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
+//   POST   /api/v1/admin/discharge-snapshots  — Submit discharge wizard payload (upsert client + create snapshot)
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
@@ -1009,5 +1010,194 @@ router.get(
   }
 );
 
-export default router;
+// =============================================================================
+// POST /api/v1/admin/discharge-snapshots
+//
+// Creates a DischargeSnapshot linked to an existing or newly-upserted Client.
+//
+// The 7-step discharge wizard collects two categories of data:
+//   1. Basic client identity (firstName, lastName, email, phone)
+//   2. Financial / demographic snapshot fields
+//
+// Strategy — upsert then create:
+//   • We look up the client by email. If they already exist we update their
+//     name; if not, we create them. Prisma upsert handles both.
+//   • After the upsert we create the DischargeSnapshot connected to that
+//     client via clientId.
+//
+// Note on lawyerId:
+//   Client.lawyerId is required by the schema. The authenticated lawyer's ID
+//   (extracted from the JWT by requireLawyerJwt) is used when creating a new
+//   client. If the client already exists their lawyerId is unchanged.
+//
+// Request body (JSON):
+//   {
+//     firstName:               string   — required
+//     lastName:                string   — required
+//     email:                   string   — required (upsert key)
+//     phone?:                  string
+//
+//     hasFederalLoans:         string   — required ("yes" | "no" | "unsure")
+//     principalBalance?:       number
+//     householdSize?:          number
+//     monthlyGrossIncome?:     number
+//     monthlyTakeHomePay?:     number
+//     additionalIncome?:       number
+//     housingExpenses?:        number
+//     transportationExpenses?: number
+//     dependentCareExpenses?:  number
+//     isEmployed?:             boolean
+//     workInFieldOfStudy?:     boolean
+//     unemployed5PlusYears?:   boolean
+//     hasDisability?:          boolean
+//     didGraduate?:            boolean
+//     schoolClosed?:           boolean
+//     is65OrOlder?:            boolean
+//     lastAttendedSchool?:     string   — ISO 8601 date string
+//   }
+//
+// Responses:
+//   201  { client, snapshot }  — Created
+//   400  { error: string }    — Missing required field
+//   401  { error: string }    — Missing or invalid JWT
+//   403  { error: string }    — Valid JWT but role !== 'lawyer'
+//   500  { error: string }    — Global error handler
+// =============================================================================
 
+router.post(
+  '/discharge-snapshots',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const lawyerId = (req as LawyerRequest).lawyerId;
+
+      // ── Destructure payload ─────────────────────────────────────────────────
+      const {
+        firstName,
+        lastName,
+        email,
+        hasFederalLoans,
+        principalBalance,
+        householdSize,
+        monthlyGrossIncome,
+        monthlyTakeHomePay,
+        additionalIncome,
+        housingExpenses,
+        transportationExpenses,
+        dependentCareExpenses,
+        isEmployed,
+        workInFieldOfStudy,
+        unemployed5PlusYears,
+        hasDisability,
+        didGraduate,
+        schoolClosed,
+        is65OrOlder,
+        lastAttendedSchool,
+      } = req.body as {
+        firstName?:              string;
+        lastName?:               string;
+        email?:                  string;
+        hasFederalLoans?:        string;
+        principalBalance?:       number;
+        householdSize?:          number;
+        monthlyGrossIncome?:     number;
+        monthlyTakeHomePay?:     number;
+        additionalIncome?:       number;
+        housingExpenses?:        number;
+        transportationExpenses?: number;
+        dependentCareExpenses?:  number;
+        isEmployed?:             boolean;
+        workInFieldOfStudy?:     boolean;
+        unemployed5PlusYears?:   boolean;
+        hasDisability?:          boolean;
+        didGraduate?:            boolean;
+        schoolClosed?:           boolean;
+        is65OrOlder?:            boolean;
+        lastAttendedSchool?:     string;
+      };
+
+      // ── Validate required fields ────────────────────────────────────────────
+      if (!firstName?.trim()) {
+        res.status(400).json({ error: 'firstName is required.' });
+        return;
+      }
+      if (!lastName?.trim()) {
+        res.status(400).json({ error: 'lastName is required.' });
+        return;
+      }
+      if (!email?.trim()) {
+        res.status(400).json({ error: 'email is required.' });
+        return;
+      }
+      if (!hasFederalLoans?.trim()) {
+        res.status(400).json({ error: 'hasFederalLoans is required.' });
+        return;
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+      const fullName        = `${firstName.trim()} ${lastName.trim()}`;
+
+      // ── Upsert Client ───────────────────────────────────────────────────────
+      // Creates the client if they don't exist (using the JWT lawyerId);
+      // updates their display name if they already do.
+      const client = await prisma.client.upsert({
+        where:  { email: normalizedEmail },
+        create: {
+          name:         fullName,
+          email:        normalizedEmail,
+          // passwordHash is empty here — this client is created by the lawyer
+          // via the wizard, not through the client self-registration portal.
+          passwordHash: '',
+          lawyerId,
+        },
+        update: {
+          name: fullName,
+        },
+        select: {
+          id:        true,
+          name:      true,
+          email:     true,
+          status:    true,
+          createdAt: true,
+        },
+      });
+
+      // ── Create DischargeSnapshot ────────────────────────────────────────────
+      const snapshot = await prisma.dischargeSnapshot.create({
+        data: {
+          clientId:               client.id,
+          hasFederalLoans:        hasFederalLoans.trim(),
+          principalBalance:       principalBalance       ?? undefined,
+          householdSize:          householdSize          ?? undefined,
+          monthlyGrossIncome:     monthlyGrossIncome     ?? undefined,
+          monthlyTakeHomePay:     monthlyTakeHomePay     ?? undefined,
+          additionalIncome:       additionalIncome       ?? undefined,
+          housingExpenses:        housingExpenses        ?? undefined,
+          transportationExpenses: transportationExpenses ?? undefined,
+          dependentCareExpenses:  dependentCareExpenses  ?? undefined,
+          isEmployed:             isEmployed             ?? undefined,
+          workInFieldOfStudy:     workInFieldOfStudy     ?? undefined,
+          unemployed5PlusYears:   unemployed5PlusYears   ?? undefined,
+          hasDisability:          hasDisability          ?? undefined,
+          didGraduate:            didGraduate            ?? undefined,
+          schoolClosed:           schoolClosed           ?? undefined,
+          is65OrOlder:            is65OrOlder            ?? undefined,
+          lastAttendedSchool:     lastAttendedSchool
+            ? new Date(lastAttendedSchool)
+            : undefined,
+          // isDischargeable stays null; status stays "Incomplete" (schema defaults)
+        },
+      });
+
+      console.log(
+        `[admin] 📋 DischargeSnapshot ${snapshot.id} created for client ${client.id} (${normalizedEmail})`
+      );
+
+      res.status(201).json({ client, snapshot });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+export default router;
