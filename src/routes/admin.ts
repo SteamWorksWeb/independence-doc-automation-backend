@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // THE INDEPENDENCE LAW FIRM — ADMIN ROUTER
 // src/routes/admin.ts
 //
@@ -1105,6 +1105,7 @@ router.get(
 //   400  { error: string }    — Missing required field
 //   401  { error: string }    — Missing or invalid JWT
 //   403  { error: string }    — Valid JWT but role !== 'lawyer'
+//   409  { error: string }    — A client with this email already exists
 //   500  { error: string }    — Global error handler
 // =============================================================================
 
@@ -1160,7 +1161,7 @@ router.post(
         lastAttendedSchool?:     string;
       };
 
-      // â”€â”€ Validate required fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ————————————————————————————————————————————————————————————————————————————
       if (!firstName?.trim()) {
         res.status(400).json({ error: 'firstName is required.' });
         return;
@@ -1230,22 +1231,31 @@ router.post(
         const d = new Date(String(val));
         return isNaN(d.getTime()) ? null : d;
       }
-
-      // â”€â”€ Upsert Client â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // Creates the client if they don't exist (using the JWT lawyerId);
-      // updates their display name if they already do.
-      const client = await prisma.client.upsert({
+      // -- Pre-flight: duplicate email check ---------------------------------
+      // Reject submissions where the email already belongs to an existing
+      // client. This prevents the wizard from silently overwriting client data
+      // when the same borrower is entered a second time. Callers receive a
+      // 409 Conflict so the frontend can surface a clear error to the lawyer.
+      const existingClient = await prisma.client.findUnique({
         where:  { email: normalizedEmail },
-        create: {
+        select: { id: true },
+      });
+
+      if (existingClient) {
+        res.status(409).json({ error: 'A borrower with this email already exists.' });
+        return;
+      }
+
+      // -- Create Client -------------------------------------------------------
+      // Email confirmed unique above; create the new client record outright.
+      // passwordHash is intentionally empty -- this client is created by the
+      // lawyer via the wizard, not through the client self-registration portal.
+      const client = await prisma.client.create({
+        data: {
           name:         fullName,
           email:        normalizedEmail,
-          // passwordHash is empty here â€” this client is created by the lawyer
-          // via the wizard, not through the client self-registration portal.
           passwordHash: '',
           lawyerId,
-        },
-        update: {
-          name: fullName,
         },
         select: {
           id:        true,
