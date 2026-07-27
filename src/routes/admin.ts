@@ -574,10 +574,7 @@ router.delete(
 //
 // Fetches the full conversation thread for a specific client, ordered
 // chronologically (oldest first) so the frontend can render top-to-bottom.
-//
-// Each message includes:
-//   id, content, senderType ("LAWYER" | "CLIENT"), lawyerId (nullable),
-//   clientId, createdAt.
+// Routes through the Conversation model (borrowerId → Conversation → messages).
 //
 // Path param:
 //   :id — the client's UUID
@@ -597,7 +594,7 @@ router.get(
       const prisma   = getPrisma();
       const clientId = String(req.params.id);
 
-      // ── Verify the client exists ────────────────────────────────────────────
+      // ── Verify the client exists ──────────────────────────────────────────
       const clientExists = await prisma.client.findUnique({
         where:  { id: clientId },
         select: { id: true },
@@ -608,19 +605,27 @@ router.get(
         return;
       }
 
-      // ── Fetch all messages for this client thread ─────────────────────────────
-      const messages = await prisma.message.findMany({
-        where:   { clientId },
-        orderBy: { createdAt: 'asc' },
-        select: {
-          id:         true,
-          content:    true,
-          senderType: true,
-          lawyerId:   true,
-          clientId:   true,
-          createdAt:  true,
+      // ── Fetch messages through the Conversation thread ────────────────────
+      // The Conversation record may not exist yet (thread is created lazily).
+      const conversation = await prisma.conversation.findUnique({
+        where: { borrowerId: clientId },
+        include: {
+          messages: {
+            where:   { deletedAt: null },
+            orderBy: { createdAt: 'asc' },
+            select: {
+              id:          true,
+              body:        true,
+              senderType:  true,
+              senderUserId: true,
+              visibility:  true,
+              createdAt:   true,
+            },
+          },
         },
       });
+
+      const messages = conversation?.messages ?? [];
 
       res.status(200).json({ messages });
     } catch (err) {
@@ -633,8 +638,11 @@ router.get(
 // POST /api/v1/admin/clients/:id/messages
 //
 // Creates a new message in the client's conversation thread, sent by the
-// authenticated lawyer. senderType is hardcoded to "LAWYER"; lawyerId is
+// authenticated lawyer. senderType is hardcoded to STAFF; senderUserId is
 // extracted from the JWT payload (req.lawyerId set by requireLawyerJwt).
+//
+// Lazily creates the Conversation record (borrowerId → client) if it does
+// not yet exist so the first staff message bootstraps the thread.
 //
 // Path param:
 //   :id — the client's UUID
@@ -657,17 +665,16 @@ router.post(
     try {
       const prisma   = getPrisma();
       const clientId = String(req.params.id);
-      // lawyerId is attached to the request by requireLawyerJwt (payload.sub)
       const lawyerId = (req as LawyerRequest).lawyerId;
       const { content } = req.body as { content?: string };
 
-      // ── Validate content ──────────────────────────────────────────────────────
+      // ── Validate content ──────────────────────────────────────────────────
       if (!content?.trim()) {
         res.status(400).json({ error: 'Message content is required.' });
         return;
       }
 
-      // ── Verify the client exists ────────────────────────────────────────────
+      // ── Verify the client exists ──────────────────────────────────────────
       const clientExists = await prisma.client.findUnique({
         where:  { id: clientId },
         select: { id: true },
@@ -678,21 +685,32 @@ router.post(
         return;
       }
 
-      // ── Create the message ────────────────────────────────────────────────────
+      // ── Lazily upsert Conversation — first staff message creates the thread
+      const conversation = await prisma.conversation.upsert({
+        where:  { borrowerId: clientId },
+        create: { borrowerId: clientId, assignedToId: lawyerId },
+        update: { updatedAt: new Date() },
+        select: { id: true },
+      });
+
+      // ── Create the message ────────────────────────────────────────────────
+      //   senderType is always STAFF on this admin-only route.
+      //   createdAt is server-side (Prisma default — not from request body).
       const newMessage = await prisma.message.create({
         data: {
-          content:    content.trim(),
-          senderType: 'LAWYER',      // hardcoded — this endpoint is lawyer-only
-          clientId,
-          lawyerId,
+          conversationId: conversation.id,
+          body:           content.trim(),
+          senderType:     'STAFF',
+          senderUserId:   lawyerId,
+          visibility:     'CLIENT_VISIBLE',
         },
         select: {
-          id:         true,
-          content:    true,
-          senderType: true,
-          lawyerId:   true,
-          clientId:   true,
-          createdAt:  true,
+          id:           true,
+          body:         true,
+          senderType:   true,
+          senderUserId: true,
+          visibility:   true,
+          createdAt:    true,
         },
       });
 

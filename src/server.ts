@@ -18,6 +18,7 @@ import authRouter from './routes/auth';
 import clientRouter from './routes/clients';
 import intakeRouter from './routes/intake';
 import adminRouter from './routes/admin';
+import conversationsRouter from './routes/conversations';
 
 // ── Load environment ──────────────────────────────────────────────────────────
 dotenv.config();
@@ -87,6 +88,7 @@ app.use('/api/v1/auth', authRouter);     // versioned alias (POST /api/v1/auth/l
 app.use('/api/v1/clients', clientRouter);
 app.use('/api/v1/intake', intakeRouter);
 app.use('/api/v1/admin', adminRouter);
+app.use('/api/v1/conversations', conversationsRouter); // staff messaging (slice 2)
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
