@@ -19,6 +19,7 @@ import clientRouter from './routes/clients';
 import intakeRouter from './routes/intake';
 import adminRouter from './routes/admin';
 import conversationsRouter from './routes/conversations';
+import clientMessagesRouter from './routes/clientMessages';
 
 // ── Load environment ──────────────────────────────────────────────────────────
 dotenv.config();
@@ -89,6 +90,7 @@ app.use('/api/v1/clients', clientRouter);
 app.use('/api/v1/intake', intakeRouter);
 app.use('/api/v1/admin', adminRouter);
 app.use('/api/v1/conversations', conversationsRouter); // staff messaging (slice 2)
+app.use('/api/v1/client/messages', clientMessagesRouter); // borrower messaging (slice 3)
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
