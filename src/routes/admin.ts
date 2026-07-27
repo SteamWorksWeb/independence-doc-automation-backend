@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // THE INDEPENDENCE LAW FIRM — ADMIN ROUTER
 // src/routes/admin.ts
 //
@@ -19,6 +19,7 @@
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
 //   POST   /api/v1/admin/discharge-snapshots  — Submit discharge wizard payload (upsert client + create snapshot)
+//   POST   /api/v1/admin/borrowers/invite     — Invite a borrower (pre-client) to the Discharge Snapshot pipeline
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
@@ -40,7 +41,7 @@ import {
   ClientNotFoundError,
   IntakeProfileMissingError,
 } from '../services/eligibilityEngine';
-import { sendInviteEmail } from '../utils/email';
+import { sendInviteEmail, sendBorrowerInviteEmail } from '../utils/email';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -1321,6 +1322,116 @@ router.post(
         return;
       }
 
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// POST /api/v1/admin/borrowers/invite
+//
+// Creates a secure invitation for a BORROWER (pre-client Lead) to begin the
+// Discharge Snapshot intake flow. This endpoint is intentionally isolated from
+// POST /invites (the client portal invite) — they serve different onboarding
+// journeys and must not be conflated.
+//
+// Flow:
+//   1. Lawyer provides the borrower's email address
+//   2. Backend generates a 32-byte crypto-random token (256 bits of entropy)
+//   3. Saves an Invitation record with a 7-day expiry window (same model as
+//      client invites — no schema change required)
+//   4. Sends a borrower-specific email via Resend:
+//        Subject: "Action Required: Complete Your Discharge Snapshot Intake Questionnaire"
+//        Body: Never uses the word "Client" — addresses the recipient as a borrower
+//   5. Returns the invitation record in the response
+//
+// The invite link routes to /borrower/intake?token=<token>, NOT /login?token=<token>,
+// so borrowers land directly in the Discharge Snapshot pipeline.
+//
+// Request body (JSON):
+//   {
+//     email: string  — Borrower email to invite  (required)
+//   }
+//
+// Responses:
+//   201  { invitation: { id, email, token, expiresAt }, intakeLink: string }
+//   400  { error: string }   — Missing or invalid email
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.post(
+  '/borrowers/invite',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const { email } = req.body as { email?: string };
+
+      // ── Validate email presence ───────────────────────────────────────────
+      if (!email?.trim()) {
+        res.status(400).json({ error: 'Email address is required' });
+        return;
+      }
+
+      // ── Validate email format ─────────────────────────────────────────────
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        res.status(400).json({ error: 'Invalid email address format' });
+        return;
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+
+      // ── Generate secure token ─────────────────────────────────────────────
+      //   32 bytes → 64-char hex string → 256 bits of entropy.
+      //   Stored directly in the DB (not hashed) because the token is
+      //   single-use and short-lived (7 days). The intake link embeds
+      //   this token as a query parameter.
+      const token = crypto.randomBytes(32).toString('hex');
+
+      // ── Set expiration: 7 days from now ───────────────────────────────────
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      // ── Persist invitation ────────────────────────────────────────────────
+      const prisma      = getPrisma();
+      const invitation  = await prisma.invitation.create({
+        data: {
+          email:    normalizedEmail,
+          token,
+          expiresAt,
+          lawyerId,
+        },
+        select: {
+          id:        true,
+          email:     true,
+          token:     true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      // ── Build borrower intake link ─────────────────────────────────────────
+      //   Routes to the Discharge Snapshot intake page, NOT the client login.
+      //   The frontend /borrower/intake route handles token redemption and
+      //   creates the Client record with status: 'Snapshot Pending'.
+      const frontendUrl  = process.env.FRONTEND_URL ?? 'https://independence-doc-automation.vercel.app';
+      const intakeLink   = `${frontendUrl}/borrower/intake?token=${token}`;
+
+      // ── Dispatch borrower-specific email via Resend ───────────────────────
+      //   Uses sendBorrowerInviteEmail — entirely separate from sendInviteEmail.
+      //   Subject line and body copy never use the word "Client".
+      await sendBorrowerInviteEmail(normalizedEmail, intakeLink);
+
+      console.log(`[admin] ✅ Borrower intake invitation dispatched to ${normalizedEmail}`);
+
+      // ── Return invitation record ───────────────────────────────────────────
+      res.status(201).json({
+        invitation,
+        intakeLink,
+      });
+
+    } catch (err) {
       next(err);
     }
   }
