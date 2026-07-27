@@ -22,7 +22,8 @@
 //      - Email lookups (login, duplicate-check) on both models
 //      - lawyerId on Client (dashboard queries, case aggregations)
 //      - verificationToken on Client (token lookup during email verification)
-//      - clientId on Message (fetch all messages for a given client)
+//      - borrowerId on Conversation (fetch conversation for a given client)
+//      - conversationId on Message (fetch all messages in a thread)
 //
 //   5. SNAKE_CASE TABLE NAMES — @@map() ensures DB tables use Postgres
 //      convention ("lawyers", "clients", "messages") while Prisma models use PascalCase.
@@ -72,12 +73,10 @@ model Lawyer {
   // onDelete: Restrict prevents accidental orphaning of Client records.
   clients     Client[]
   invitations Invitation[]
-  // Messages sent by this lawyer to any of their clients.
-  messages    Message[]
   // Documents uploaded by this lawyer on behalf of a client.
   documents   Document[]
-  // ConversationMessages sent by this lawyer in the structured messaging system.
-  conversationMessages ConversationMessage[]
+  // Conversations this lawyer is assigned to handle.
+  assignedConversations Conversation[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -151,17 +150,13 @@ model Client {
   // A client may have multiple snapshots over the life of their case.
   dischargeSnapshots DischargeSnapshot[]
 
-  // ── Messages (1-to-many) ───────────────────────────────────────────────────
-  // All messages in this client's conversation thread.
-  messages Message[]
-
   // ── Documents (1-to-many) ──────────────────────────────────────────────────
   // All documents associated with this client's case archive.
   documents Document[]
 
-  // ── Conversations (1-to-many) ──────────────────────────────────────────────
-  // Structured messaging threads for the client messaging system (slice 1).
-  conversations Conversation[]
+  // ── Conversation (1-to-1) ──────────────────────────────────────────────────
+  // One structured messaging thread per borrower (@unique on borrowerId).
+  conversation Conversation?
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
@@ -322,55 +317,126 @@ model Invitation {
 // =============================================================================
 // MESSAGE
 //
-// A single message in the Lawyer ↔ Client secure conversation thread.
+// A single message within a Conversation thread.
 //
-// senderType: discriminator string — either "LAWYER" or "CLIENT".
-//   This lets the frontend render messages on the correct side of the UI
-//   without a join, and avoids a polymorphic union type on sender.
+// senderType (SenderType enum):
+//   STAFF    — authored by a firm lawyer or paralegal.
+//   BORROWER — authored by the client via their portal.
 //
-// clientId (required): every message belongs to exactly one client thread.
-//   onDelete: Cascade — messages are removed if the client is deleted.
+// senderUserId (optional):
+//   The Lawyer.id when senderType = STAFF; null for BORROWER messages
+//   (the borrower is identified through Conversation.borrowerId).
+//   Not a hard FK — kept generic so future staff roles (paralegal, etc.)
+//   can also send messages without a schema change.
 //
-// lawyerId (optional): populated when senderType = "LAWYER".
-//   Null when senderType = "CLIENT" (client-originated messages).
-//   onDelete: SetNull — if a lawyer is ever removed, their messages are
-//   preserved in the thread (clientId still links them to the case).
+// visibility (Visibility enum):
+//   CLIENT_VISIBLE — shown in client portal and staff view.
+//   INTERNAL       — staff-only note; never surfaced to the borrower.
+//
+// deletedAt: soft-delete timestamp. Null = active. Non-null = deleted.
+//   The row is preserved for audit purposes; the UI filters it out.
+//
+// reads (1-to-many MessageRead): per-user read receipts.
+//   Enables unread-badge counts for both staff and borrower portals.
 //
 // Ordering: always query ORDER BY createdAt ASC to render chronologically.
 // =============================================================================
 
 model Message {
   // ── Identity ───────────────────────────────────────────────────────────────
-  id String @id @default(uuid())
+  id String @id @default(cuid())
+
+  // ── Parent thread ──────────────────────────────────────────────────────────
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // ── Sender ─────────────────────────────────────────────────────────────────
+  // Generic user ID — Lawyer.id when STAFF, null when BORROWER.
+  senderUserId String?
+  senderType   SenderType
+
+  // ── Visibility gate ────────────────────────────────────────────────────────
+  visibility Visibility @default(CLIENT_VISIBLE)
 
   // ── Content ────────────────────────────────────────────────────────────────
-  content String @db.Text
+  body String @db.Text
 
-  // ── Sender discriminator ────────────────────────────────────────────────────
-  // Valid values: "LAWYER" | "CLIENT"
-  senderType String
+  // ── Soft delete ────────────────────────────────────────────────────────────
+  // Non-null once a message is deleted. Kept for audit trail.
+  deletedAt DateTime?
 
-  // ── Client relation (required) ─────────────────────────────────────────────
-  // Every message belongs to exactly one client conversation thread.
-  clientId String
-  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
-  // ── Lawyer relation (optional) ─────────────────────────────────────────────
-  // Populated only when senderType = "LAWYER".
-  // SetNull preserves message history if a lawyer account is removed.
-  lawyerId String?
-  lawyer   Lawyer? @relation(fields: [lawyerId], references: [id], onDelete: SetNull)
+  // ── Read receipts (1-to-many) ──────────────────────────────────────────────
+  reads MessageRead[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
 
   // ── Indexes ────────────────────────────────────────────────────────────────
-  // clientId: primary query path — fetch all messages for a given client thread.
-  @@index([clientId])
-  // clientId + createdAt: supports paginated chronological thread queries.
-  @@index([clientId, createdAt])
+  // conversationId: primary query — fetch all messages in a thread.
+  @@index([conversationId])
+  // conversationId + createdAt: paginated chronological thread rendering.
+  @@index([conversationId, createdAt])
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("messages")
+}
+
+// =============================================================================
+// MESSAGE READ
+//
+// Per-user read receipt for a single Message.
+// Composite PK (messageId, userId) — one record per user per message.
+// Inserted the first time a user views a message; never updated.
+//
+// userId is generic — can reference either a Lawyer.id or Client.id,
+// discriminated by the parent Message.senderType context.
+// =============================================================================
+
+model MessageRead {
+  // ── Composite PK ───────────────────────────────────────────────────────────
+  // One read record per (message, user) pair.
+  messageId String
+  userId    String
+
+  // ── Timestamp ──────────────────────────────────────────────────────────────
+  readAt DateTime @default(now())
+
+  // ── Message relation ───────────────────────────────────────────────────────
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("message_reads")
+}
+
+// =============================================================================
+// CONVERSATION ACCESS LOG
+//
+// Immutable audit record written each time any user opens a Conversation.
+// Used for compliance tracing and "last viewed" indicators on the dashboard.
+//
+// userId is generic — can reference a Lawyer.id or Client.id.
+// viewedAt defaults to insertion time; always insert, never update.
+// =============================================================================
+
+model ConversationAccessLog {
+  // ── Identity ───────────────────────────────────────────────────────────────
+  id String @id @default(cuid())
+
+  // ── Thread reference ───────────────────────────────────────────────────────
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // ── Viewer ─────────────────────────────────────────────────────────────────
+  // Generic user ID — Lawyer.id or Client.id, identified by context.
+  userId String
+
+  // ── Timestamp ──────────────────────────────────────────────────────────────
+  viewedAt DateTime @default(now())
+
+  // ── Indexes ────────────────────────────────────────────────────────────────
+  @@index([conversationId])
+  // ── Table name ─────────────────────────────────────────────────────────────
+  @@map("conversation_access_logs")
 }
 
 // =============================================================================
@@ -519,7 +585,7 @@ model DischargeSnapshot {
 // MESSAGING SYSTEM — ENUMS
 //
 // ConvStatus  — lifecycle of a Conversation thread.
-// SenderType  — discriminates who authored a ConversationMessage.
+// SenderType  — discriminates who authored a Message.
 // Visibility  — controls whether a message is surfaced to the client portal.
 // =============================================================================
 
@@ -542,126 +608,58 @@ enum Visibility {
 // =============================================================================
 // CONVERSATION
 //
-// A single persistent thread between the firm and one client.
-// Each Client has at most one active Conversation (enforced at the application
-// layer; the schema permits multiple for historical archiving).
+// One persistent thread per borrower (@unique on borrowerId enforces 1:1).
+//
+// borrowerId (@unique):
+//   Hard FK to Client. The @unique constraint means one Conversation per
+//   client — the database enforces this, not just the application layer.
+//   onDelete: Cascade — thread and all messages removed with the client.
+//
+// assignedToId (optional):
+//   The Lawyer currently handling this thread. Null = unassigned.
+//   onDelete: SetNull — thread persists if the assigned lawyer is removed.
 //
 // status (ConvStatus):
-//   OPEN            — Staff is actively working on the thread.
+//   OPEN            — Thread is active; staff is engaged.
 //   AWAITING_CLIENT — Staff has replied; waiting for borrower response.
-//   RESOLVED        — Thread closed. No further action expected.
-//
-// subject (optional):
-//   A short label set when the thread is created (e.g. "Document Request").
-//   Null for generic check-in threads.
-//
-// Relations:
-//   Client    (N:1, required) — conversation belongs to exactly one client.
-//   messages  (1:N)          — ordered list of ConversationMessage records.
-//
-// onDelete: Cascade — when a Client is deleted, all their conversations and
-//   their descendant messages are automatically removed (no orphans).
+//   RESOLVED        — Thread closed; no further action expected.
 // =============================================================================
 
 model Conversation {
   // ── Identity ───────────────────────────────────────────────────────────────
-  id String @id @default(uuid())
+  id String @id @default(cuid())
 
-  // ── Thread metadata ────────────────────────────────────────────────────────
-  subject String?
+  // ── Borrower (1-to-1) ──────────────────────────────────────────────────────
+  // @unique enforces exactly one Conversation per Client at the DB level.
+  borrowerId String @unique
+  borrower   Client @relation(fields: [borrowerId], references: [id], onDelete: Cascade)
+
+  // ── Assigned staff (optional) ──────────────────────────────────────────────
+  // The lawyer responsible for this thread. Null = unassigned inbox.
+  // SetNull preserves the thread if the assigned lawyer record is removed.
+  assignedToId String?
+  assignedTo   Lawyer? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
 
   // ── Lifecycle status ───────────────────────────────────────────────────────
   status ConvStatus @default(OPEN)
 
-  // ── Client relation (required) ─────────────────────────────────────────────
-  // Every conversation belongs to exactly one client.
-  // Cascade ensures conversations are pruned when a client record is deleted.
-  clientId String
-  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
   // ── Messages (1-to-many) ───────────────────────────────────────────────────
-  // All messages exchanged in this thread, ordered by createdAt ASC.
-  messages ConversationMessage[]
+  // All messages in this thread. Always query ORDER BY createdAt ASC.
+  messages Message[]
+
+  // ── Access audit log (1-to-many) ───────────────────────────────────────────
+  // Immutable view records written each time any user opens this thread.
+  accessLogs ConversationAccessLog[]
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // ── Indexes ────────────────────────────────────────────────────────────────
-  // clientId: primary query path — fetch all conversations for a client.
-  @@index([clientId])
-  // status: filter open/awaiting threads on the staff dashboard.
+  // status: staff dashboard filter — show OPEN / AWAITING_CLIENT threads.
   @@index([status])
+  // assignedToId: fetch all threads for a given lawyer.
+  @@index([assignedToId])
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("conversations")
-}
-
-// =============================================================================
-// CONVERSATION MESSAGE
-//
-// A single message within a Conversation thread.
-//
-// senderType (SenderType enum):
-//   STAFF    — authored by a firm lawyer or paralegal.
-//   BORROWER — authored by the client via their portal.
-//
-// visibility (Visibility enum):
-//   CLIENT_VISIBLE — shown in the client portal and the staff view.
-//   INTERNAL       — staff-only note; never surfaced to the client.
-//
-// senderId (optional):
-//   When senderType = STAFF this holds the Lawyer.id of the sender.
-//   When senderType = BORROWER this field is null (the Client is identified
-//   via the parent Conversation.clientId).
-//   SetNull — preserves message history if a lawyer account is removed.
-//
-// readAt (optional):
-//   UTC timestamp set when the recipient first opens the message.
-//   Null until read. Used for unread-badge counts in the portal.
-//
-// onDelete: Cascade — messages are removed when their parent Conversation
-//   is deleted (which itself cascades from Client deletion).
-// =============================================================================
-
-model ConversationMessage {
-  // ── Identity ───────────────────────────────────────────────────────────────
-  id String @id @default(uuid())
-
-  // ── Parent thread ──────────────────────────────────────────────────────────
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-
-  // ── Content ────────────────────────────────────────────────────────────────
-  body String @db.Text
-
-  // ── Sender discriminator ───────────────────────────────────────────────────
-  senderType SenderType
-
-  // ── Visibility gate ────────────────────────────────────────────────────────
-  // Defaults to CLIENT_VISIBLE; set to INTERNAL for staff-only annotations.
-  visibility Visibility @default(CLIENT_VISIBLE)
-
-  // ── Optional sender FK (staff only) ───────────────────────────────────────
-  // Populated when senderType = STAFF. Null for BORROWER messages.
-  // SetNull — preserves thread history if the lawyer record is ever removed.
-  senderId String?
-  sender   Lawyer? @relation(fields: [senderId], references: [id], onDelete: SetNull)
-
-  // ── Read receipt ───────────────────────────────────────────────────────────
-  // Set by the application when the recipient first views the message.
-  readAt DateTime?
-
-  // ── Timestamps ─────────────────────────────────────────────────────────────
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // ── Indexes ────────────────────────────────────────────────────────────────
-  // conversationId: primary query path — fetch all messages in a thread.
-  @@index([conversationId])
-  // conversationId + createdAt: paginated chronological thread rendering.
-  @@index([conversationId, createdAt])
-  // visibility: staff dashboard filters (show only CLIENT_VISIBLE to borrowers).
-  @@index([visibility])
-  // ── Table name ─────────────────────────────────────────────────────────────
-  @@map("conversation_messages")
 }
