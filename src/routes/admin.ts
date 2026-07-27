@@ -1010,6 +1010,50 @@ router.get(
   }
 );
 
+
+// =============================================================================
+// GET /api/v1/admin/discharge-snapshots
+//
+// Returns all DischargeSnapshot records across every client, ordered newest-
+// first (updatedAt DESC). Designed for the admin Discharge Snapshot table that
+// replaces hardcoded mock data on the frontend.
+//
+// Each snapshot includes the full `client` relation so the frontend can display
+// the borrower's name (sourced from client.name) without a secondary lookup.
+//
+// Responses:
+//   200  { snapshots: (DischargeSnapshot & { client: Client })[] }
+//         â€” Flat array of all snapshot records with embedded client object.
+//           Array is empty when no snapshots have been submitted yet.
+//   401  { error: string }   â€” Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   â€” Valid JWT but role !== 'lawyer'
+//   500  { error: string }   â€” Global error handler
+// =============================================================================
+
+router.get(
+  '/discharge-snapshots',
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+
+      const snapshots = await prisma.dischargeSnapshot.findMany({
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          // Include the full client record so the frontend table can render
+          // the borrower name (client.name) alongside each snapshot row.
+          client: true,
+        },
+      });
+
+      console.log(`[admin] ðŸ“‹ Fetched ${snapshots.length} discharge snapshot(s)`);
+
+      res.status(200).json({ snapshots });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // =============================================================================
 // POST /api/v1/admin/discharge-snapshots
 //
