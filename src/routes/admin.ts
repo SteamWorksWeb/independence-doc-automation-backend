@@ -20,6 +20,7 @@
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
 //   POST   /api/v1/admin/discharge-snapshots  — Submit discharge wizard payload (upsert client + create snapshot)
 //   DELETE /api/v1/admin/discharge-snapshots/:id — Permanently delete a snapshot and its parent client record
+//   PATCH  /api/v1/admin/discharge-snapshots/:id/status — Update the pipeline status of a discharge snapshot
 //   POST   /api/v1/admin/borrowers/invite     — Invite a borrower (pre-client) to the Discharge Snapshot pipeline
 
 // Security model:
@@ -1495,6 +1496,70 @@ router.delete(
       );
 
       res.status(200).json({ message: 'Borrower permanently deleted' });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PATCH /api/v1/admin/discharge-snapshots/:id/status
+//
+// Allows a lawyer to manually override the pipeline status of a Discharge
+// Snapshot (e.g., marking it as 'Incomplete' or 'Archived') without modifying
+// any other snapshot fields.
+//
+// Path param:
+//   :id — the DischargeSnapshot UUID
+//
+// Request body (JSON):
+//   { status: string }  — required; the new pipeline status value
+//
+// Responses:
+//   200  { snapshot: DischargeSnapshot }  — Updated snapshot record
+//   400  { error: string }               — Missing status field in body
+//   401  { error: string }               — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }               — Valid JWT but role !== 'lawyer'
+//   404  { error: string }               — No snapshot found for the given id
+//   500  { error: string }               — Global error handler
+// =============================================================================
+
+router.patch(
+  '/discharge-snapshots/:id/status',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma     = getPrisma();
+      const snapshotId = String(req.params.id);
+      const { status } = req.body as { status?: string };
+
+      // ── Validate status presence ──────────────────────────────────────────
+      if (!status || !String(status).trim()) {
+        res.status(400).json({ error: 'status is required.' });
+        return;
+      }
+
+      // ── Verify the snapshot exists ────────────────────────────────────────
+      const existing = await prisma.dischargeSnapshot.findUnique({
+        where:  { id: snapshotId },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Discharge snapshot not found.' });
+        return;
+      }
+
+      // ── Persist the status update ─────────────────────────────────────────
+      const updatedSnapshot = await prisma.dischargeSnapshot.update({
+        where: { id: snapshotId },
+        data:  { status: String(status).trim() },
+      });
+
+      console.log(
+        `[admin] 📋 DischargeSnapshot ${snapshotId} status updated to "${status}"`
+      );
+
+      res.status(200).json({ snapshot: updatedSnapshot });
     } catch (err) {
       next(err);
     }
