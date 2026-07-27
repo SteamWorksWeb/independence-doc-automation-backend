@@ -1042,9 +1042,18 @@ router.get(
       const snapshots = await prisma.dischargeSnapshot.findMany({
         orderBy: { updatedAt: 'desc' },
         include: {
-          // Include the full client record so the frontend table can render
-          // the borrower name (client.name) alongside each snapshot row.
-          client: true,
+          // Include the client record explicitly with phone so the frontend table can render
+          // the borrower name (client.name) and contact info alongside each snapshot row.
+          client: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              status: true,
+              createdAt: true,
+            },
+          },
         },
       });
 
@@ -1124,6 +1133,7 @@ router.post(
         firstName,
         lastName,
         email,
+        phone,
         hasFederalLoans,
         principalBalance,
         householdSize,
@@ -1145,6 +1155,7 @@ router.post(
         firstName?:              string;
         lastName?:               string;
         email?:                  string;
+        phone?:                  string;
         hasFederalLoans?:        string;
         principalBalance?:       number;
         householdSize?:          number;
@@ -1257,6 +1268,7 @@ router.post(
         data: {
           name:         fullName,
           email:        normalizedEmail,
+          phone:        phone?.trim(),
           passwordHash: '',
           lawyerId,
         },
@@ -1264,6 +1276,7 @@ router.post(
           id:        true,
           name:      true,
           email:     true,
+          phone:     true,
           status:    true,
           createdAt: true,
         },

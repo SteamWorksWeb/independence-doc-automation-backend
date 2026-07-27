@@ -107,6 +107,7 @@ model Client {
   id    String @id @default(uuid())
   name  String
   email String @unique
+  phone String?
 
   // ── Credentials ────────────────────────────────────────────────────────────
   // bcrypt hash (cost 12). NEVER store plain-text passwords.
