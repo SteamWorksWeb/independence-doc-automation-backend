@@ -1062,6 +1062,9 @@ router.get(
         include: {
           // Include the client record so the frontend table can render the borrower
           // name (client.name), phone, and contact info alongside each snapshot row.
+          // intakeProfile is included so the phone number field (stored on the
+          // intake questionnaire) travels to the frontend UI — the "Phone Number
+          // Ghost Fix".
           client: {
             select: {
               id: true,
@@ -1070,6 +1073,7 @@ router.get(
               phone: true,
               status: true,
               createdAt: true,
+              intakeProfile: true,
             },
           },
         },
