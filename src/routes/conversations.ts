@@ -269,6 +269,109 @@ router.get(
 );
 
 // =============================================================================
+// POST /api/v1/conversations
+//
+// Idempotent "find-or-create" conversation for a borrower.
+//
+// Request body (JSON):
+//   { borrowerId: string }  — UUID of the client/borrower (required)
+//
+// Behaviour:
+//   • If a Conversation already exists for this borrowerId it is returned
+//     immediately (HTTP 200) — the operation is safe to call repeatedly.
+//   • If no Conversation exists one is created with status OPEN and the
+//     requesting lawyer is set as assignedToId (HTTP 201).
+//
+// Response shape (both 200 and 201):
+//   { conversation: { id, borrowerId, assignedToId, status, createdAt, updatedAt } }
+//
+// Responses:
+//   200  { conversation }  — Existing conversation returned
+//   201  { conversation }  — New conversation created
+//   400  { error: string } — Missing or empty borrowerId
+//   401  { error: string } — Missing or invalid JWT
+//   403  { error: string } — Valid JWT but role !== 'lawyer'
+//   404  { error: string } — No client exists for the given borrowerId
+//   500  { error: string } — Global error handler
+// =============================================================================
+
+router.post(
+  '/',
+  canAccessConversation,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const prisma   = getPrisma();
+
+      // ── Validate borrowerId ────────────────────────────────────────────────
+      const { borrowerId } = req.body as { borrowerId?: string };
+      if (!borrowerId?.trim()) {
+        res.status(400).json({ error: 'borrowerId is required' });
+        return;
+      }
+      const cleanBorrowerId = borrowerId.trim();
+
+      // ── Verify the client/borrower exists ──────────────────────────────────
+      const clientExists = await prisma.client.findUnique({
+        where:  { id: cleanBorrowerId },
+        select: { id: true },
+      });
+      if (!clientExists) {
+        res.status(404).json({ error: 'Borrower not found' });
+        return;
+      }
+
+      // ── Idempotent find-or-create ──────────────────────────────────────────
+      //
+      // We check first rather than using upsert so we can return the correct
+      // HTTP status code (200 vs 201) to the caller.
+      const existing = await prisma.conversation.findUnique({
+        where: { borrowerId: cleanBorrowerId },
+        select: {
+          id:           true,
+          borrowerId:   true,
+          assignedToId: true,
+          status:       true,
+          createdAt:    true,
+          updatedAt:    true,
+        },
+      });
+
+      if (existing) {
+        console.log(`[conversations] ↩ Returning existing conversation ${existing.id} for borrower ${cleanBorrowerId}`);
+        res.status(200).json({ conversation: existing });
+        return;
+      }
+
+      // ── Create new conversation ────────────────────────────────────────────
+      // status defaults to OPEN via the Prisma schema default.
+      // assignedToId is set to the requesting lawyer so the thread appears in
+      // their queue immediately.
+      const created = await prisma.conversation.create({
+        data: {
+          borrowerId:   cleanBorrowerId,
+          assignedToId: lawyerId,
+          // status omitted — Prisma uses @default(OPEN)
+        },
+        select: {
+          id:           true,
+          borrowerId:   true,
+          assignedToId: true,
+          status:       true,
+          createdAt:    true,
+          updatedAt:    true,
+        },
+      });
+
+      console.log(`[conversations] ✅ Created new conversation ${created.id} for borrower ${cleanBorrowerId} by lawyer ${lawyerId}`);
+      res.status(201).json({ conversation: created });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
 // GET /api/v1/conversations/:id/messages
 //
 // Fetches the full message thread for a conversation.
