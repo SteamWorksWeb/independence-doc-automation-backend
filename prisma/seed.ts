@@ -84,7 +84,7 @@ async function main(): Promise<void> {
       phone:        "(555) 123-4567",
       passwordHash: johnPasswordHash,
       isVerified:   true,
-      status:       "Ready for Review",
+      status:       "Filed",
       lawyerId:     adminLawyer.id,
     },
     update: {
@@ -92,7 +92,7 @@ async function main(): Promise<void> {
       phone:        "(555) 123-4567",
       passwordHash: johnPasswordHash,
       isVerified:   true,
-      status:       "Ready for Review",
+      status:       "Filed",
       lawyerId:     adminLawyer.id,
     },
     include: { dischargeSnapshots: true },
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
       phone:        "(555) 987-6543",
       passwordHash: placeholderHash,
       isVerified:   false,      // Not yet registered — invite pending
-      status:       "Intake Pending",
+      status:       "Pre-Filing",
       lawyerId:     adminLawyer.id,
     },
     update: {
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
       phone:        "(555) 987-6543",
       // Do NOT overwrite passwordHash on update — she may have already registered
       isVerified:   false,
-      status:       "Intake Pending",
+      status:       "Pre-Filing",
       lawyerId:     adminLawyer.id,
     },
     include: { dischargeSnapshots: true },

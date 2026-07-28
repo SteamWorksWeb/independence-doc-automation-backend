@@ -313,20 +313,18 @@ router.get(
 // PATCH /api/v1/admin/clients/:id/status
 //
 // Moves a client through the admin pipeline by updating their status.
-// The frontend renders a 4-step pipeline UI; this endpoint is the mechanism
+// The frontend renders a 2-step filing status UI; this endpoint is the mechanism
 // that actually persists each transition.
 //
 // Allowed status values (exact strings):
-//   "Intake Pending"   — Intake not yet reviewed
-//   "Ready for Review" — Intake complete, awaiting lawyer review
-//   "Approved"         — Case approved for filing
-//   "Rejected"         — Case not accepted
+//   "Pre-Filing" - Client is active before case filing
+//   "Filed"      - Client case has been filed
 //
 // Path param:
 //   :id — the client's UUID
 //
 // Request body (JSON):
-//   { status: string }  — must be one of the four allowed values
+//   { status: string }  - must be one of the allowed values
 //
 // Responses:
 //   200  { client: Client }  — Updated client record
@@ -338,10 +336,8 @@ router.get(
 // =============================================================================
 
 const ALLOWED_STATUSES = [
-  'Intake Pending',
-  'Ready for Review',
-  'Approved',
-  'Rejected',
+  'Pre-Filing',
+  'Filed',
 ] as const;
 
 function getNameParts(name?: string | null): { firstName: string; lastName: string } {
@@ -1418,6 +1414,7 @@ router.post(
           email:        normalizedEmail,
           phone:        phone?.trim(),
           passwordHash: '',
+          status:       'Pre-Filing',
           lawyerId,
         },
         select: {

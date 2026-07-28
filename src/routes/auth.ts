@@ -267,6 +267,7 @@ router.post(
             email:        invitation.email,
             passwordHash,
             isVerified:   true,
+            status:       'Pre-Filing',
             lawyerId:     invitation.lawyerId,
           },
           select: {
@@ -555,7 +556,7 @@ router.post(
 
       const existingClient = await prisma.client.findUnique({
         where: { email: invitation.email },
-        select: { id: true, name: true, email: true, lawyerId: true },
+        select: { id: true, name: true, email: true, lawyerId: true, status: true },
       });
 
       if (existingClient) {
@@ -565,6 +566,7 @@ router.post(
           data: {
             passwordHash,
             isVerified: true,    // isVerified = true acts as "isRegistered"
+            status: existingClient.status === 'Filed' ? 'Filed' : 'Pre-Filing',
           },
           select: {
             id:       true,
@@ -587,6 +589,7 @@ router.post(
             email:        invitation.email,
             passwordHash,
             isVerified:   true,
+            status:       'Pre-Filing',
             lawyerId:     invitation.lawyerId,
           },
           select: {
@@ -711,7 +714,7 @@ router.post(
 
         const existingClient = await tx.client.findUnique({
           where: { email: invitation.email },
-          select: { id: true },
+          select: { id: true, status: true },
         });
 
         const savedClient = existingClient
@@ -720,6 +723,7 @@ router.post(
               data: {
                 passwordHash,
                 isVerified:          true,
+                status: existingClient.status === 'Filed' ? 'Filed' : 'Pre-Filing',
                 verificationToken:   null,
                 verificationExpires: null,
               },
@@ -740,6 +744,7 @@ router.post(
                 email:        invitation.email,
                 passwordHash,
                 isVerified:   true,
+                status:       'Pre-Filing',
                 lawyerId:     invitation.lawyerId,
               },
               select: {

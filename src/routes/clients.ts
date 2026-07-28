@@ -203,6 +203,7 @@ router.post(
           email:              normalizedEmail,
           passwordHash,
           lawyerId:           lawyerId,
+          status:             'Pre-Filing',
           verificationToken,
           verificationExpires,
         },
