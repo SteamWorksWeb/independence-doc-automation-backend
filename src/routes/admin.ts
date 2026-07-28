@@ -1382,9 +1382,8 @@ router.post(
 //        Body: Never uses the word "Client" — addresses the recipient as a borrower
 //   5. Returns the invitation record in the response
 //
-// The invite link routes to /login?token=<token> — the same universal portal
-// entry path used by the client invite. The frontend routes the borrower to
-// the correct dashboard after authentication based on their database status.
+// The invite link routes to /intake?token=<token> so the borrower lands directly
+// in the intake setup flow before setting their password.
 //
 // Request body (JSON):
 //   {
@@ -1450,12 +1449,9 @@ router.post(
       });
 
       // ── Build borrower invite link ────────────────────────────────────────
-      //   Uses the SAME universal portal entry path as the client invite
-      //   (/login?token=<token>). After the borrower authenticates, the
-      //   frontend routes them to the correct dashboard based on their
-      //   database status (e.g. 'Snapshot Pending').
+      //   Sends the borrower directly into the intake setup flow.
       const frontendUrl  = process.env.FRONTEND_URL ?? 'https://independence-doc-automation.vercel.app';
-      const intakeLink   = `${frontendUrl}/login?token=${token}`;
+      const intakeLink   = `${frontendUrl}/intake?token=${token}`;
 
       // ── Dispatch borrower-specific email via Resend ───────────────────────
       //   Uses sendBorrowerInviteEmail — entirely separate from sendInviteEmail.

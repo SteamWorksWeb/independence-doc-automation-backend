@@ -208,7 +208,7 @@ async function main(): Promise<void> {
   // 4. ACTIVE INTAKE TOKEN — Tied to Jane Doe
   //    Token: "test-intake-token-123"
   //    Used in integration tests for GET /api/v1/auth/invite/verify
-  //    and POST /api/v1/auth/invite/register
+  //    and POST /api/v1/auth/intake/setup-password
   // ═══════════════════════════════════════════════════════════════════════════
   console.log("\n── Step 4: Active Intake Token ─────────────────────────────────");
 
