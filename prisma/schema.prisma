@@ -135,6 +135,10 @@ model Client {
   //   "Rejected"         — Case not accepted
   status String @default("Intake Pending")
 
+  // Soft-delete flag for admin archive workflows. Archived clients are hidden
+  // from the active dashboard roster by default.
+  isArchived Boolean @default(false)
+
   // ── Lawyer assignment ──────────────────────────────────────────────────────
   // Every client must be assigned to a supervising lawyer.
   lawyerId String
@@ -167,6 +171,8 @@ model Client {
   @@index([email])
   // lawyerId: fast dashboard queries — "show all clients for lawyer X".
   @@index([lawyerId])
+  // isArchived: fast active-vs-archived dashboard filtering.
+  @@index([isArchived])
   // verificationToken: fast token lookup during email verification flow.
   @@index([verificationToken])
   // ── Table name ─────────────────────────────────────────────────────────────

@@ -96,6 +96,57 @@ function definedOnly(payload: IntakePayload): Record<string, unknown> {
   );
 }
 
+const REQUIRED_COMPLETION_FIELDS = [
+  'phone',
+  'dob',
+  'county',
+  'address',
+  'housingStatus',
+  'schoolsHistory',
+  'hardshipNotes',
+  'unmetBasicNeeds',
+] as const;
+
+const REQUIRED_COMPLETION_NUMBERS = [
+  'householdSize',
+  'monthlyIncome',
+  'totalDebt',
+  'studentLoanDebt',
+] as const;
+
+function isBlank(value: unknown): boolean {
+  return (
+    value === null ||
+    value === undefined ||
+    (typeof value === 'string' && value.trim() === '')
+  );
+}
+
+function hasFirstAndLastName(name?: string | null): boolean {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  return parts.length >= 2;
+}
+
+function isCompleteIntakePayload(
+  profile: Record<string, unknown>,
+  clientName?: string | null
+): boolean {
+  if (!hasFirstAndLastName(clientName)) return false;
+
+  for (const field of REQUIRED_COMPLETION_FIELDS) {
+    if (isBlank(profile[field])) return false;
+  }
+
+  for (const field of REQUIRED_COMPLETION_NUMBERS) {
+    const value = profile[field];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      return false;
+    }
+  }
+
+  return typeof profile.householdSize === 'number' && profile.householdSize > 0;
+}
+
 // =============================================================================
 // POST /api/v1/intake
 //
@@ -145,6 +196,26 @@ router.post(
 
       // ── Upsert intake profile ──────────────────────────────────────────────
       const prisma = getPrisma();
+
+      if (body.isCompleted === true) {
+        const [existingProfile, client] = await Promise.all([
+          prisma.intakeProfile.findUnique({ where: { clientId } }),
+          prisma.client.findUnique({
+            where:  { id: clientId },
+            select: { name: true },
+          }),
+        ]);
+
+        const mergedProfile = {
+          ...(existingProfile ?? {}),
+          ...data,
+        };
+
+        if (!isCompleteIntakePayload(mergedProfile, client?.name)) {
+          data.isCompleted = false;
+        }
+      }
+
       const intakeProfile = await prisma.intakeProfile.upsert({
         where:  { clientId },
         create: { clientId, ...data },

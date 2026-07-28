@@ -157,16 +157,31 @@ router.use(requireLawyerJwt);
 
 router.get(
   '/clients',
-  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const prisma  = getPrisma();
+      const archiveFilter = String(
+        req.query.archived ?? req.query.filter ?? ''
+      ).trim().toLowerCase();
+      const includeArchived =
+        String(req.query.includeArchived ?? '').trim().toLowerCase() === 'true' ||
+        archiveFilter === 'all';
+      const where =
+        includeArchived
+          ? undefined
+          : archiveFilter === 'archived' || archiveFilter === 'true'
+          ? { isArchived: true }
+          : { isArchived: false };
 
       const clients = await prisma.client.findMany({
+        where,
         select: {
           id:          true,
+          name:        true,
           email:       true,
           status:      true,
           isVerified:  true,
+          isArchived:  true,
           createdAt:   true,
           // Include the full intakeProfile so the dashboard can determine
           // whether the client has started or completed the DOJ questionnaire.
@@ -175,7 +190,7 @@ router.get(
         orderBy: { createdAt: 'desc' },
       });
 
-      res.status(200).json({ clients });
+      res.status(200).json({ clients: clients.map(withNameParts) });
     } catch (err) {
       next(err);
     }
@@ -215,9 +230,11 @@ router.get(
         where: { id: clientId },
         select: {
           id:         true,
+          name:       true,
           email:      true,
           status:     true,
           isVerified: true,
+          isArchived: true,
           createdAt:  true,
           // Include the full intakeProfile — every DOJ questionnaire field
           // is returned so the frontend tabbed interface can display them
@@ -231,7 +248,7 @@ router.get(
         return;
       }
 
-      res.status(200).json({ client });
+      res.status(200).json({ client: withNameParts(client) });
     } catch (err) {
       next(err);
     }
@@ -327,6 +344,23 @@ const ALLOWED_STATUSES = [
   'Rejected',
 ] as const;
 
+function getNameParts(name?: string | null): { firstName: string; lastName: string } {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] ?? '',
+    lastName:  parts.slice(1).join(' '),
+  };
+}
+
+function withNameParts<T extends { name?: string | null }>(
+  client: T
+): T & { firstName: string; lastName: string } {
+  return {
+    ...client,
+    ...getNameParts(client.name),
+  };
+}
+
 router.patch(
   '/clients/:id/status',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -359,9 +393,11 @@ router.patch(
         data:  { status },
         select: {
           id:         true,
+          name:       true,
           email:      true,
           status:     true,
           isVerified: true,
+          isArchived: true,
           createdAt:  true,
           intakeProfile: true,
         },
@@ -369,7 +405,97 @@ router.patch(
 
       console.log(`[admin] 📋 Client ${clientId} status updated to "${status}"`);
 
-      res.status(200).json({ client: updatedClient });
+      res.status(200).json({ client: withNameParts(updatedClient) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PATCH /api/v1/admin/clients/:id/archive
+//
+// Soft-deletes a client by marking it archived. Archived clients are excluded
+// from GET /api/v1/admin/clients unless an archived/all filter is requested.
+// =============================================================================
+
+router.patch(
+  '/clients/:id/archive',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      const existing = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      const archivedClient = await prisma.client.update({
+        where: { id: clientId },
+        data:  { isArchived: true },
+        select: {
+          id:         true,
+          name:       true,
+          email:      true,
+          status:     true,
+          isVerified: true,
+          isArchived: true,
+          createdAt:  true,
+          intakeProfile: true,
+        },
+      });
+
+      console.log(`[admin] Client ${clientId} archived`);
+
+      res.status(200).json({ client: withNameParts(archivedClient) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// DELETE /api/v1/admin/clients/:id
+//
+// Permanently deletes a client and associated intake/snapshot/document/thread
+// records. Child records are removed first so the delete works even if older DB
+// constraints were created before cascade settings were added.
+// =============================================================================
+
+router.delete(
+  '/clients/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      const existing = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true, email: true },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      await prisma.$transaction([
+        prisma.dischargeSnapshot.deleteMany({ where: { clientId } }),
+        prisma.intakeProfile.deleteMany({ where: { clientId } }),
+        prisma.document.deleteMany({ where: { clientId } }),
+        prisma.conversation.deleteMany({ where: { borrowerId: clientId } }),
+        prisma.client.delete({ where: { id: clientId } }),
+      ]);
+
+      console.log(`[admin] Client ${clientId} (${existing.email}) permanently deleted`);
+
+      res.status(200).json({ message: 'Client permanently deleted' });
     } catch (err) {
       next(err);
     }
