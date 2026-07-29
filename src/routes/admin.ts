@@ -272,6 +272,8 @@ router.get(
       const prisma   = getPrisma();
       const clientId = String(req.params.id);
 
+      console.log("[DEBUG] Fetching 360 Profile for ID:", req.params.id);
+
       const client = await prisma.client.findUnique({
         where: { id: clientId },
         select: {
@@ -312,13 +314,15 @@ router.get(
       });
 
       if (!client) {
+        console.log("[DEBUG] 360 Profile Not Found in DB for ID:", req.params.id);
         res.status(404).json({ error: 'Client not found.' });
         return;
       }
 
       res.status(200).json({ client: withNameParts(client) });
-    } catch (err) {
-      next(err);
+    } catch (error) {
+      console.error("[DEBUG] Prisma Error fetching profile:", error);
+      next(error);
     }
   }
 );
