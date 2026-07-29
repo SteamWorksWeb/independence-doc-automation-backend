@@ -7,7 +7,9 @@
 // Routes:
 //   GET    /api/v1/admin/clients              — Fetch all clients (lawyer-only)
 //   GET    /api/v1/admin/clients/:id          — Fetch single client detail
+//   GET    /api/v1/admin/clients/:id/profile  — Fetch unified 360-degree case profile
 //   GET    /api/v1/admin/clients/:id/eligibility — Point-based eligibility score
+//   PATCH  /api/v1/admin/clients/:id/assign   — Update staff assignment
 //   PATCH  /api/v1/admin/clients/:id/status   — Update client pipeline status
 //   GET    /api/v1/admin/clients/:id/messages  — Fetch conversation thread
 //   POST   /api/v1/admin/clients/:id/messages  — Send a message as LAWYER
@@ -256,6 +258,72 @@ router.get(
 );
 
 // =============================================================================
+// GET /api/v1/admin/clients/:id/profile
+//
+// Returns the unified 360-degree case profile for the Admin Dashboard:
+// borrower/client identity, assignment fields, intake profile, discharge
+// snapshots, and uploaded documents in one response.
+// =============================================================================
+
+router.get(
+  '/clients/:id/profile',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      const client = await prisma.client.findUnique({
+        where: { id: clientId },
+        select: {
+          id:             true,
+          name:           true,
+          email:          true,
+          phone:          true,
+          status:         true,
+          intakeStatus:   true,
+          isVerified:     true,
+          isArchived:     true,
+          assignedToId:   true,
+          assigneeName:   true,
+          lawyerId:       true,
+          createdAt:      true,
+          updatedAt:      true,
+          intakeProfile:  true,
+          dischargeSnapshots: {
+            orderBy: { createdAt: 'desc' },
+          },
+          documents: {
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id:           true,
+              fileName:     true,
+              fileUrl:      true,
+              documentType: true,
+              mimeType:     true,
+              sizeBytes:    true,
+              uploadedBy:   true,
+              clientId:     true,
+              lawyerId:     true,
+              uploadedAt:   true,
+              createdAt:    true,
+            },
+          },
+        },
+      });
+
+      if (!client) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      res.status(200).json({ client: withNameParts(client) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
 // GET /api/v1/admin/clients/:id/eligibility
 //
 // Delegates to the EligibilityEngine service (src/services/eligibilityEngine.ts)
@@ -360,6 +428,93 @@ function withNameParts<T extends { name?: string | null }>(
     ...getNameParts(client.name),
   };
 }
+
+function parseOptionalAssignmentField(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+// =============================================================================
+// PATCH /api/v1/admin/clients/:id/assign
+//
+// Updates the lightweight staff assignment fields on the borrower/client record.
+// Accepts null or an empty string to clear either assignment value.
+// =============================================================================
+
+router.patch(
+  '/clients/:id/assign',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+      const body = req.body as {
+        assignedToId?: unknown;
+        assigneeName?: unknown;
+      };
+
+      const assignedToId = parseOptionalAssignmentField(body.assignedToId);
+      const assigneeName = parseOptionalAssignmentField(body.assigneeName);
+
+      if (
+        (body.assignedToId !== undefined && assignedToId === undefined) ||
+        (body.assigneeName !== undefined && assigneeName === undefined)
+      ) {
+        res.status(400).json({
+          error: 'assignedToId and assigneeName must be strings, null, or omitted.',
+        });
+        return;
+      }
+
+      if (assignedToId === undefined && assigneeName === undefined) {
+        res.status(400).json({
+          error: 'At least one assignment field is required.',
+        });
+        return;
+      }
+
+      const existing = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      const updatedClient = await prisma.client.update({
+        where: { id: clientId },
+        data: {
+          assignedToId,
+          assigneeName,
+        },
+        select: {
+          id:           true,
+          name:         true,
+          email:        true,
+          status:       true,
+          intakeStatus: true,
+          isVerified:   true,
+          isArchived:   true,
+          assignedToId: true,
+          assigneeName: true,
+          createdAt:    true,
+          updatedAt:    true,
+        },
+      });
+
+      console.log(`[admin] Client ${clientId} assignment updated`);
+
+      res.status(200).json({ client: withNameParts(updatedClient) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 router.patch(
   '/clients/:id/status',

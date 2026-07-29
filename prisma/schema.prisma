@@ -140,6 +140,9 @@ model Client {
   // from the active dashboard roster by default.
   isArchived Boolean @default(false)
 
+  assignedToId String?
+  assigneeName String?
+
   // ── Lawyer assignment ──────────────────────────────────────────────────────
   // Every client must be assigned to a supervising lawyer.
   lawyerId String
