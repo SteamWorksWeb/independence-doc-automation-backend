@@ -71,10 +71,10 @@ model Lawyer {
   // ── Relations ──────────────────────────────────────────────────────────────
   // A Lawyer supervises many Clients.
   // onDelete: Restrict prevents accidental orphaning of Client records.
-  clients     Client[]
-  invitations Invitation[]
+  clients               Client[]
+  invitations           Invitation[]
   // Documents uploaded by this lawyer on behalf of a client.
-  documents   Document[]
+  documents             Document[]
   // Conversations this lawyer is assigned to handle.
   assignedConversations Conversation[]
 
@@ -105,9 +105,9 @@ model Lawyer {
 
 model Client {
   // ── Identity ───────────────────────────────────────────────────────────────
-  id    String @id @default(uuid())
+  id    String  @id @default(uuid())
   name  String
-  email String @unique
+  email String  @unique
   phone String?
 
   // ── Credentials ────────────────────────────────────────────────────────────
@@ -131,7 +131,8 @@ model Client {
   // Tracks the client through the admin pipeline. Valid values:
   //   "Pre-Filing" - Client is active before case filing
   //   "Filed"      - Client case has been filed
-  status String @default("Pre-Filing")
+  status       String @default("Pre-Filing")
+  intakeStatus String @default("Incomplete")
 
   // Soft-delete flag for admin archive workflows. Archived clients are hidden
   // from the active dashboard roster by default.
@@ -561,10 +562,15 @@ model DischargeSnapshot {
   flaggedDocuments       Json?
 
   // ── Employment & Circumstance Flags ───────────────────────────────────────
-  isEmployed           Boolean?
-  workInFieldOfStudy   Boolean?
-  unemployed5PlusYears Boolean?
-  hasDisability        Boolean?
+  isEmployed                Boolean?
+  workInFieldOfStudy        Boolean?
+  unemployed5PlusYears      Boolean?
+  hasDisability             Boolean?
+  ownsVehicle               Boolean?
+  militaryBranch            String?
+  militaryStartDate         DateTime?
+  militaryEndDate           DateTime?
+  dischargeCharacterization String?
 
   // ── Education & School Flags ───────────────────────────────────────────────
   didGraduate        Boolean?

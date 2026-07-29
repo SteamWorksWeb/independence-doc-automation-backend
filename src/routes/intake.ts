@@ -90,6 +90,26 @@ interface IntakePayload {
   isCompleted?: boolean;
 }
 
+interface CompleteIntakePayload {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  militaryBranch?: string;
+  militaryStartDate?: string;
+  militaryEndDate?: string;
+  dischargeCharacterization?: string;
+  hasDisability?: unknown;
+  isEmployed?: unknown;
+  unemployedLongTerm?: unknown;
+  ownsVehicle?: unknown;
+  rentExpense?: unknown;
+  medicalExpense?: unknown;
+  utilitiesExpense?: unknown;
+  homeMaintenanceExpense?: unknown;
+  carInsuranceExpense?: unknown;
+  gasExpense?: unknown;
+}
+
 type ExpensePayload = Record<IrsExpenseKey, number>;
 
 const EXPENSE_FIELDS: IrsExpenseKey[] = [
@@ -119,6 +139,32 @@ function parseExpenseAmount(value: unknown): number | null {
   }
 
   return null;
+}
+
+function parseOptionalBoolean(value: unknown): boolean | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', 'yes', '1'].includes(normalized)) return true;
+    if (['false', 'no', '0'].includes(normalized)) return false;
+  }
+
+  return null;
+}
+
+function parseOptionalDate(value: unknown): Date | null {
+  if (value === undefined || value === null || value === '') return null;
+
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function trimmedOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== ''
+    ? value.trim()
+    : undefined;
 }
 
 const REQUIRED_COMPLETION_FIELDS = [
@@ -249,6 +295,190 @@ router.post(
 
       res.status(200).json({ intakeProfile });
 
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// POST /api/v1/intake/complete
+//
+// Final client-facing intake submission. Saves borrower identity updates,
+// military and financial snapshot fields, IRS expense document flags, and moves
+// the borrower into the Pre-Filing pipeline state.
+// =============================================================================
+
+router.post(
+  '/complete',
+  requireClientJwt,
+  async (req: ExpressRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const clientId = (req as unknown as ClientRequest).clientId;
+      const body = req.body as CompleteIntakePayload;
+
+      const firstName = trimmedOrUndefined(body.firstName);
+      const lastName = trimmedOrUndefined(body.lastName);
+      const phone = trimmedOrUndefined(body.phone);
+
+      if (!firstName) {
+        res.status(400).json({ error: 'firstName is required' });
+        return;
+      }
+
+      if (!lastName) {
+        res.status(400).json({ error: 'lastName is required' });
+        return;
+      }
+
+      if (!phone) {
+        res.status(400).json({ error: 'phone is required' });
+        return;
+      }
+
+      const expenses = {} as ExpensePayload;
+      for (const field of EXPENSE_FIELDS) {
+        const amount = parseExpenseAmount(body[field]);
+
+        if (amount === null) {
+          res.status(400).json({ error: `${field} must be a non-negative number` });
+          return;
+        }
+
+        expenses[field] = amount;
+      }
+
+      const hasDisability = parseOptionalBoolean(body.hasDisability);
+      const isEmployed = parseOptionalBoolean(body.isEmployed);
+      const unemployedLongTerm = parseOptionalBoolean(body.unemployedLongTerm);
+      const ownsVehicle = parseOptionalBoolean(body.ownsVehicle);
+      const militaryStartDate = parseOptionalDate(body.militaryStartDate);
+      const militaryEndDate = parseOptionalDate(body.militaryEndDate);
+
+      const booleanFields = [
+        ['hasDisability', body.hasDisability, hasDisability],
+        ['isEmployed', body.isEmployed, isEmployed],
+        ['unemployedLongTerm', body.unemployedLongTerm, unemployedLongTerm],
+        ['ownsVehicle', body.ownsVehicle, ownsVehicle],
+      ] as const;
+
+      for (const [field, raw, parsed] of booleanFields) {
+        if (raw === undefined || raw === null || raw === '') {
+          res.status(400).json({ error: `${field} is required` });
+          return;
+        }
+
+        if (parsed === null) {
+          res.status(400).json({ error: `${field} must be a boolean` });
+          return;
+        }
+      }
+
+      if (body.militaryStartDate && !militaryStartDate) {
+        res.status(400).json({ error: 'militaryStartDate must be a valid date' });
+        return;
+      }
+
+      if (body.militaryEndDate && !militaryEndDate) {
+        res.status(400).json({ error: 'militaryEndDate must be a valid date' });
+        return;
+      }
+
+      const flaggedDocuments = evaluateExpenses(expenses);
+      const prisma = getPrisma();
+      const fullName = `${firstName} ${lastName}`;
+
+      const result = await prisma.$transaction(async (tx) => {
+        const client = await tx.client.findUnique({
+          where: { id: clientId },
+          select: { id: true },
+        });
+
+        if (!client) return null;
+
+        const latestSnapshot = await tx.dischargeSnapshot.findFirst({
+          where: { clientId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+
+        await tx.client.update({
+          where: { id: clientId },
+          data: {
+            name: fullName,
+            phone,
+            status: 'Pre-Filing',
+            intakeStatus: 'Complete',
+          },
+        });
+
+        await tx.intakeProfile.upsert({
+          where: { clientId },
+          create: {
+            clientId,
+            phone,
+            hasDisability: hasDisability ?? false,
+            isEmployed: isEmployed ?? false,
+            unemployed5of10: unemployedLongTerm ?? false,
+            hasCar: ownsVehicle ?? false,
+            isCompleted: true,
+          },
+          update: {
+            phone,
+            ...(hasDisability !== null ? { hasDisability } : {}),
+            ...(isEmployed !== null ? { isEmployed } : {}),
+            ...(unemployedLongTerm !== null ? { unemployed5of10: unemployedLongTerm } : {}),
+            ...(ownsVehicle !== null ? { hasCar: ownsVehicle } : {}),
+            isCompleted: true,
+          },
+        });
+
+        const snapshotData = {
+          militaryBranch: trimmedOrUndefined(body.militaryBranch),
+          militaryStartDate: militaryStartDate ?? undefined,
+          militaryEndDate: militaryEndDate ?? undefined,
+          dischargeCharacterization: trimmedOrUndefined(body.dischargeCharacterization),
+          hasDisability: hasDisability ?? undefined,
+          isEmployed: isEmployed ?? undefined,
+          unemployed5PlusYears: unemployedLongTerm ?? undefined,
+          ownsVehicle: ownsVehicle ?? undefined,
+          rentExpense: expenses.rentExpense,
+          medicalExpense: expenses.medicalExpense,
+          utilitiesExpense: expenses.utilitiesExpense,
+          homeMaintenanceExpense: expenses.homeMaintenanceExpense,
+          carInsuranceExpense: expenses.carInsuranceExpense,
+          gasExpense: expenses.gasExpense,
+          housingExpenses: expenses.rentExpense + expenses.utilitiesExpense + expenses.homeMaintenanceExpense,
+          transportationExpenses: expenses.carInsuranceExpense + expenses.gasExpense,
+          flaggedDocuments,
+        };
+
+        const snapshot = latestSnapshot
+          ? await tx.dischargeSnapshot.update({
+              where: { id: latestSnapshot.id },
+              data: snapshotData,
+            })
+          : await tx.dischargeSnapshot.create({
+              data: {
+                clientId,
+                hasFederalLoans: 'unsure',
+                ...snapshotData,
+              },
+            });
+
+        return { snapshotId: snapshot.id };
+      });
+
+      if (!result) {
+        res.status(404).json({ error: 'Borrower not found' });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        flaggedDocuments,
+        snapshotId: result.snapshotId,
+      });
     } catch (err) {
       next(err);
     }
