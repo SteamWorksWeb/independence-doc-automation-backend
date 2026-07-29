@@ -477,6 +477,9 @@ model Document {
   // pre-signed URL or CloudFront URL in the production storage release.
   fileUrl String
 
+  // Client-facing category requested by the document hub (e.g. "Tax Return").
+  documentType String @default("Other")
+
   // MIME type of the uploaded file (e.g. "application/pdf", "image/png").
   mimeType String
 
@@ -499,13 +502,16 @@ model Document {
   lawyer   Lawyer? @relation(fields: [lawyerId], references: [id], onDelete: SetNull)
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
-  createdAt DateTime @default(now())
+  uploadedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 
   // ── Indexes ────────────────────────────────────────────────────────────────
   // clientId: primary query path — fetch all documents for a given client.
   @@index([clientId])
   // clientId + createdAt: supports date-sorted archive queries.
   @@index([clientId, createdAt])
+  // clientId + uploadedAt: supports client hub sorting by upload time.
+  @@index([clientId, uploadedAt])
   // ── Table name ─────────────────────────────────────────────────────────────
   @@map("documents")
 }
