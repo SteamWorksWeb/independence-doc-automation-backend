@@ -1,5 +1,5 @@
 // =============================================================================
-// THE INDEPENDENCE LAW FIRM — EMAIL UTILITY
+// LIBERTY LAW — EMAIL UTILITY
 // src/utils/email.ts
 //
 // Responsibilities:
@@ -16,7 +16,7 @@
 //     (Do NOT change this to onboarding@resend.dev — that sandbox address
 //      silently fails for all recipients except the API key owner.)
 //
-// Template origin: Independence Law brand palette — navy / gold / off-white.
+// Template origin: Liberty Law brand palette — navy / gold / off-white.
 // =============================================================================
 
 import { Resend } from 'resend';
@@ -33,7 +33,7 @@ if (!RESEND_API_KEY) {
 // Hardcoded to the firm's verified Resend domain.
 // Do NOT revert to onboarding@resend.dev (Resend sandbox — silently fails
 // for all recipients who are not the API-key owner).
-const FROM_ADDRESS = 'The Independence Law Firm <apply@theindependencelaw.com>';
+const FROM_ADDRESS = 'Liberty Law <apply@theindependencelaw.com>';
 
 // ── Resend client (singleton) ─────────────────────────────────────────────────
 const resend = new Resend(RESEND_API_KEY);
@@ -66,7 +66,7 @@ export async function sendVerificationEmail(
     const { error } = await resend.emails.send({
       from:    FROM_ADDRESS,
       to:      toEmail,
-      subject: 'Verify your Independence Law Portal access',
+      subject: 'Verify your Liberty Law Portal access',
       html,
     });
 
@@ -111,7 +111,7 @@ export async function sendInviteEmail(
     const { error } = await resend.emails.send({
       from:    FROM_ADDRESS,
       to:      toEmail,
-      subject: 'You have been invited to the Independence Law Client Portal',
+      subject: 'You have been invited to the Liberty Law Client Portal',
       html,
     });
 
@@ -204,7 +204,7 @@ function buildVerificationEmailHtml(verifyUrl: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Verify your Independence Law Portal access</title>
+  <title>Verify your Liberty Law Portal access</title>
 </head>
 <body style="
   margin: 0;
@@ -240,7 +240,7 @@ function buildVerificationEmailHtml(verifyUrl: string): string {
                 text-transform: uppercase;
                 color: #C9A84C;
                 font-family: Arial, Helvetica, sans-serif;
-              ">THE INDEPENDENCE LAW FIRM</p>
+              ">LIBERTY LAW</p>
               <h1 style="
                 margin: 10px 0 0;
                 font-size: 26px;
@@ -269,7 +269,7 @@ function buildVerificationEmailHtml(verifyUrl: string): string {
                 color: #2D2D2D;
               ">
                 You have been invited to access your secure client portal with
-                The Independence Law Firm. Please verify your email address to
+                Liberty Law. Please verify your email address to
                 complete your registration and gain access to your case documents.
               </p>
 
@@ -342,7 +342,7 @@ function buildVerificationEmailHtml(verifyUrl: string): string {
                   color: #888888;
                   font-family: Arial, Helvetica, sans-serif;
                 ">
-                  If you did not request access to the Independence Law Client Portal,
+                  If you did not request access to the Liberty Law Client Portal,
                   you may safely disregard this email. No account will be created
                   without email verification. For security concerns, please contact
                   your attorney directly.
@@ -372,7 +372,7 @@ function buildVerificationEmailHtml(verifyUrl: string): string {
                 font-size: 11px;
                 color: #5C7080;
                 font-family: Arial, Helvetica, sans-serif;
-              ">© ${new Date().getFullYear()} The Independence Law Firm. All rights reserved.</p>
+              ">© ${new Date().getFullYear()} Liberty Law. All rights reserved.</p>
             </td>
           </tr>
 
@@ -408,7 +408,7 @@ function buildInviteEmailHtml(inviteLink: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>You have been invited to the Independence Law Client Portal</title>
+  <title>You have been invited to the Liberty Law Client Portal</title>
 </head>
 <body style="
   margin: 0;
@@ -443,7 +443,7 @@ function buildInviteEmailHtml(inviteLink: string): string {
                 text-transform: uppercase;
                 color: #C9A84C;
                 font-family: Arial, Helvetica, sans-serif;
-              ">THE INDEPENDENCE LAW FIRM</p>
+              ">LIBERTY LAW</p>
               <h1 style="
                 margin: 10px 0 0;
                 font-size: 26px;
@@ -471,7 +471,7 @@ function buildInviteEmailHtml(inviteLink: string): string {
                 color: #2D2D2D;
               ">
                 Your attorney has invited you to access your secure client portal
-                with The Independence Law Firm. This portal gives you direct access
+                with Liberty Law. This portal gives you direct access
                 to your case documents, eligibility status, and secure communication
                 with your legal team.
               </p>
@@ -574,7 +574,7 @@ function buildInviteEmailHtml(inviteLink: string): string {
                 font-size: 11px;
                 color: #5C7080;
                 font-family: Arial, Helvetica, sans-serif;
-              ">© ${new Date().getFullYear()} The Independence Law Firm. All rights reserved.</p>
+              ">© ${new Date().getFullYear()} Liberty Law. All rights reserved.</p>
             </td>
           </tr>
 
@@ -651,7 +651,7 @@ function buildBorrowerInviteEmailHtml(intakeLink: string): string {
                 text-transform: uppercase;
                 color: #C9A84C;
                 font-family: Arial, Helvetica, sans-serif;
-              ">THE INDEPENDENCE LAW FIRM</p>
+              ">LIBERTY LAW</p>
               <h1 style="
                 margin: 10px 0 0;
                 font-size: 26px;
@@ -679,7 +679,7 @@ function buildBorrowerInviteEmailHtml(intakeLink: string): string {
                 line-height: 1.7;
                 color: #2D2D2D;
               ">
-                The Independence Law Firm has opened a secure intake questionnaire
+                Liberty Law has opened a secure intake questionnaire
                 on your behalf as part of the student loan discharge review process.
                 Your responses will allow our team to assess your discharge eligibility
                 and prepare your case file.
@@ -784,7 +784,7 @@ function buildBorrowerInviteEmailHtml(intakeLink: string): string {
                 font-size: 11px;
                 color: #5C7080;
                 font-family: Arial, Helvetica, sans-serif;
-              ">© ${new Date().getFullYear()} The Independence Law Firm. All rights reserved.</p>
+              ">© ${new Date().getFullYear()} Liberty Law. All rights reserved.</p>
             </td>
           </tr>
 

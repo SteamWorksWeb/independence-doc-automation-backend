@@ -313,12 +313,14 @@ router.get(
 // PATCH /api/v1/admin/clients/:id/status
 //
 // Moves a client through the admin pipeline by updating their status.
-// The frontend renders a 2-step filing status UI; this endpoint is the mechanism
+// The frontend renders the filing status UI; this endpoint is the mechanism
 // that actually persists each transition.
 //
 // Allowed status values (exact strings):
-//   "Pre-Filing" - Client is active before case filing
-//   "Filed"      - Client case has been filed
+//   "Pre-Filing"   - Client is active before case filing
+//   "Filed"        - Client case has been filed
+//   "Wait to File" - Client is delayed by the 10-year rule
+//   "Discharged"   - Client case has been successfully completed
 //
 // Path param:
 //   :id — the client's UUID
@@ -338,6 +340,8 @@ router.get(
 const ALLOWED_STATUSES = [
   'Pre-Filing',
   'Filed',
+  'Wait to File',
+  'Discharged',
 ] as const;
 
 function getNameParts(name?: string | null): { firstName: string; lastName: string } {

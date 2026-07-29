@@ -187,6 +187,18 @@ router.post(
 
 /** 7 days in seconds — mirrors frontend loginClient.ts COOKIE_MAX_AGE */
 const CLIENT_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+const VALID_CLIENT_STATUSES = [
+  'Pre-Filing',
+  'Filed',
+  'Wait to File',
+  'Discharged',
+] as const;
+
+function normalizeClientStatus(status: string): typeof VALID_CLIENT_STATUSES[number] {
+  return VALID_CLIENT_STATUSES.includes(status as typeof VALID_CLIENT_STATUSES[number])
+    ? status as typeof VALID_CLIENT_STATUSES[number]
+    : 'Pre-Filing';
+}
 
 router.post(
   '/accept-invite',
@@ -566,7 +578,7 @@ router.post(
           data: {
             passwordHash,
             isVerified: true,    // isVerified = true acts as "isRegistered"
-            status: existingClient.status === 'Filed' ? 'Filed' : 'Pre-Filing',
+            status: normalizeClientStatus(existingClient.status),
           },
           select: {
             id:       true,
@@ -723,7 +735,7 @@ router.post(
               data: {
                 passwordHash,
                 isVerified:          true,
-                status: existingClient.status === 'Filed' ? 'Filed' : 'Pre-Filing',
+                status: normalizeClientStatus(existingClient.status),
                 verificationToken:   null,
                 verificationExpires: null,
               },
