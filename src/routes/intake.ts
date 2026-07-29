@@ -24,6 +24,7 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { requireClientJwt, ClientRequest } from '../middleware/clientJwt';
+import { evaluateExpenses, IrsExpenseKey } from '../services/irsStandards';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -89,11 +90,35 @@ interface IntakePayload {
   isCompleted?: boolean;
 }
 
+type ExpensePayload = Record<IrsExpenseKey, number>;
+
+const EXPENSE_FIELDS: IrsExpenseKey[] = [
+  'rentExpense',
+  'medicalExpense',
+  'utilitiesExpense',
+  'homeMaintenanceExpense',
+  'carInsuranceExpense',
+  'gasExpense',
+];
+
 // ── Helper: strip undefined fields for partial upsert ─────────────────────────
 function definedOnly(payload: IntakePayload): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(payload).filter(([, v]) => v !== undefined)
   );
+}
+
+function parseExpenseAmount(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  return null;
 }
 
 const REQUIRED_COMPLETION_FIELDS = [
@@ -224,6 +249,77 @@ router.post(
 
       res.status(200).json({ intakeProfile });
 
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// POST /api/v1/intake/expenses
+//
+// Saves IRS-threshold expense values to the authenticated client's latest
+// discharge snapshot and returns the document proofs required by the evaluator.
+// =============================================================================
+
+router.post(
+  '/expenses',
+  requireClientJwt,
+  async (req: ExpressRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const clientId = (req as unknown as ClientRequest).clientId;
+      const body = req.body as Partial<Record<IrsExpenseKey, unknown>>;
+      const expenses = {} as ExpensePayload;
+
+      for (const field of EXPENSE_FIELDS) {
+        const amount = parseExpenseAmount(body[field]);
+
+        if (amount === null) {
+          res.status(400).json({ error: `${field} must be a non-negative number` });
+          return;
+        }
+
+        expenses[field] = amount;
+      }
+
+      const flaggedDocuments = evaluateExpenses(expenses);
+      const prisma = getPrisma();
+
+      const latestSnapshot = await prisma.dischargeSnapshot.findFirst({
+        where: { clientId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+
+      const snapshotData = {
+        rentExpense: expenses.rentExpense,
+        medicalExpense: expenses.medicalExpense,
+        utilitiesExpense: expenses.utilitiesExpense,
+        homeMaintenanceExpense: expenses.homeMaintenanceExpense,
+        carInsuranceExpense: expenses.carInsuranceExpense,
+        gasExpense: expenses.gasExpense,
+        housingExpenses: expenses.rentExpense + expenses.utilitiesExpense + expenses.homeMaintenanceExpense,
+        transportationExpenses: expenses.carInsuranceExpense + expenses.gasExpense,
+        flaggedDocuments,
+      };
+
+      const snapshot = latestSnapshot
+        ? await prisma.dischargeSnapshot.update({
+            where: { id: latestSnapshot.id },
+            data: snapshotData,
+          })
+        : await prisma.dischargeSnapshot.create({
+            data: {
+              clientId,
+              hasFederalLoans: 'unsure',
+              ...snapshotData,
+            },
+          });
+
+      res.status(200).json({
+        flaggedDocuments,
+        snapshotId: snapshot.id,
+      });
     } catch (err) {
       next(err);
     }

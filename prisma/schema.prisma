@@ -552,6 +552,13 @@ model DischargeSnapshot {
   housingExpenses        Float?
   transportationExpenses Float?
   dependentCareExpenses  Float?
+  rentExpense            Float?
+  medicalExpense         Float?
+  utilitiesExpense       Float?
+  homeMaintenanceExpense Float?
+  carInsuranceExpense    Float?
+  gasExpense             Float?
+  flaggedDocuments       Json?
 
   // ── Employment & Circumstance Flags ───────────────────────────────────────
   isEmployed           Boolean?
