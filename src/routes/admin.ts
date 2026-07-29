@@ -141,6 +141,251 @@ const router = Router();
 // Apply the lawyer JWT guard to every route in this router.
 router.use(requireLawyerJwt);
 
+type CaseProfileSource = 'client' | 'borrower';
+type CaseProfileRecord = Record<string, unknown> & {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  status?: string | null;
+  intakeStatus?: string | null;
+  isVerified?: boolean | null;
+  isArchived?: boolean | null;
+  assignedToId?: string | null;
+  assigneeName?: string | null;
+  lawyerId?: string | null;
+  createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
+  intakeProfile?: unknown;
+  dischargeSnapshots?: unknown;
+  documents?: unknown;
+};
+
+type PrismaWithOptionalBorrower = PrismaClient & {
+  borrower?: {
+    findUnique(args: unknown): Promise<CaseProfileRecord | null>;
+  };
+};
+
+const profileDocumentSelect = {
+  id:           true,
+  fileName:     true,
+  fileUrl:      true,
+  documentType: true,
+  mimeType:     true,
+  sizeBytes:    true,
+  uploadedBy:   true,
+  clientId:     true,
+  lawyerId:     true,
+  uploadedAt:   true,
+  createdAt:    true,
+} as const;
+
+const clientProfileSelect = {
+  id:             true,
+  name:           true,
+  email:          true,
+  phone:          true,
+  status:         true,
+  intakeStatus:   true,
+  isVerified:     true,
+  isArchived:     true,
+  assignedToId:   true,
+  assigneeName:   true,
+  lawyerId:       true,
+  createdAt:      true,
+  updatedAt:      true,
+  intakeProfile:  true,
+  dischargeSnapshots: {
+    orderBy: { createdAt: 'desc' },
+  },
+  documents: {
+    orderBy: { createdAt: 'desc' },
+    select:  profileDocumentSelect,
+  },
+} as const;
+
+function buildDocumentSelect(prisma: PrismaClient): Record<string, true> | typeof profileDocumentSelect {
+  const documentFields = getPrismaModelFields(prisma, 'Document');
+  if (documentFields.size === 0) return profileDocumentSelect;
+
+  const selectedFields = [
+    'id',
+    'fileName',
+    'fileUrl',
+    'documentType',
+    'mimeType',
+    'sizeBytes',
+    'uploadedBy',
+    'clientId',
+    'borrowerId',
+    'lawyerId',
+    'uploadedAt',
+    'createdAt',
+  ];
+
+  return Object.fromEntries(
+    selectedFields
+      .filter((field) => documentFields.has(field))
+      .map((field) => [field, true])
+  );
+}
+
+function getPrismaModelFields(prisma: PrismaClient, modelName: string): Set<string> {
+  const models = (prisma as unknown as {
+    _runtimeDataModel?: {
+      models?: Record<string, { fields?: Array<{ name: string }> }>;
+    };
+  })._runtimeDataModel?.models;
+
+  return new Set(models?.[modelName]?.fields?.map((field) => field.name) ?? []);
+}
+
+function hasModelField(prisma: PrismaClient, modelName: string, fieldName: string): boolean {
+  const fields = getPrismaModelFields(prisma, modelName);
+  return fields.size === 0 || fields.has(fieldName);
+}
+
+function buildBorrowerProfileSelect(prisma: PrismaClient): Record<string, unknown> | undefined {
+  const borrowerFields = getPrismaModelFields(prisma, 'Borrower');
+  if (borrowerFields.size === 0) return undefined;
+
+  const scalarFields = [
+    'id',
+    'name',
+    'fullName',
+    'firstName',
+    'lastName',
+    'email',
+    'phone',
+    'status',
+    'intakeStatus',
+    'isVerified',
+    'isArchived',
+    'assignedToId',
+    'assigneeName',
+    'lawyerId',
+    'clientId',
+    'createdAt',
+    'updatedAt',
+  ];
+
+  const select: Record<string, unknown> = Object.fromEntries(
+    scalarFields
+      .filter((field) => borrowerFields.has(field))
+      .map((field) => [field, true])
+  );
+
+  if (borrowerFields.has('intakeProfile')) {
+    select['intakeProfile'] = true;
+  }
+  if (borrowerFields.has('dischargeSnapshots')) {
+    select['dischargeSnapshots'] = { orderBy: { createdAt: 'desc' } };
+  }
+  if (borrowerFields.has('documents')) {
+    select['documents'] = {
+      orderBy: { createdAt: 'desc' },
+      select:  buildDocumentSelect(prisma),
+    };
+  }
+
+  return Object.keys(select).length ? select : undefined;
+}
+
+async function attachBorrowerProfileRelations(
+  prisma: PrismaClient,
+  borrower: CaseProfileRecord
+): Promise<CaseProfileRecord> {
+  const relationId = String(borrower.clientId ?? borrower.id);
+  const enriched: CaseProfileRecord = { ...borrower };
+
+  if (enriched.intakeProfile === undefined) {
+    if (hasModelField(prisma, 'IntakeProfile', 'clientId')) {
+      enriched.intakeProfile = await prisma.intakeProfile.findUnique({
+        where: { clientId: relationId },
+      });
+    } else if (hasModelField(prisma, 'IntakeProfile', 'borrowerId')) {
+      enriched.intakeProfile = await prisma.intakeProfile.findFirst({
+        where: { borrowerId: relationId },
+      } as never);
+    }
+  }
+
+  if (enriched.dischargeSnapshots === undefined) {
+    const snapshotOwnerField = hasModelField(prisma, 'DischargeSnapshot', 'clientId')
+      ? 'clientId'
+      : 'borrowerId';
+
+    enriched.dischargeSnapshots = await prisma.dischargeSnapshot.findMany({
+      where:   { [snapshotOwnerField]: relationId },
+      orderBy: { createdAt: 'desc' },
+    } as never);
+  }
+
+  if (enriched.documents === undefined) {
+    const documentOwnerField = hasModelField(prisma, 'Document', 'clientId')
+      ? 'clientId'
+      : 'borrowerId';
+
+    enriched.documents = await prisma.document.findMany({
+      where:   { [documentOwnerField]: relationId },
+      orderBy: { createdAt: 'desc' },
+      select:  buildDocumentSelect(prisma),
+    } as never);
+  }
+
+  return enriched;
+}
+
+async function findBorrowerProfile(
+  prisma: PrismaClient,
+  id: string
+): Promise<CaseProfileRecord | null> {
+  const borrowerDelegate = (prisma as PrismaWithOptionalBorrower).borrower;
+  if (!borrowerDelegate) return null;
+
+  const select = buildBorrowerProfileSelect(prisma);
+  const borrower = await borrowerDelegate.findUnique({
+    where: { id },
+    ...(select ? { select } : {}),
+  });
+
+  if (!borrower) return null;
+  return attachBorrowerProfileRelations(prisma, borrower);
+}
+
+function normalizeCaseProfile(
+  record: CaseProfileRecord,
+  sourceType: CaseProfileSource
+): CaseProfileRecord & { sourceType: CaseProfileSource; firstName: string; lastName: string } {
+  const fallbackName = [record.firstName, record.lastName]
+    .filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+    .join(' ');
+  const name = record.name ?? record.fullName ?? fallbackName;
+  const dischargeSnapshots = Array.isArray(record.dischargeSnapshots)
+    ? record.dischargeSnapshots
+    : [];
+  const documents = Array.isArray(record.documents)
+    ? record.documents
+    : [];
+
+  return withNameParts({
+    ...record,
+    name:               typeof name === 'string' ? name : '',
+    sourceType,
+    status:             record.status ?? 'Pre-Filing',
+    intakeStatus:       record.intakeStatus ?? (record.intakeProfile ? 'Complete' : 'Incomplete'),
+    isVerified:         record.isVerified ?? false,
+    isArchived:         record.isArchived ?? false,
+    assignedToId:       record.assignedToId ?? null,
+    assigneeName:       record.assigneeName ?? null,
+    lawyerId:           record.lawyerId ?? null,
+    intakeProfile:      record.intakeProfile ?? null,
+    dischargeSnapshots,
+    documents,
+  });
+}
+
 // =============================================================================
 // GET /api/v1/admin/clients
 //
@@ -276,50 +521,21 @@ router.get(
 
       const client = await prisma.client.findUnique({
         where: { id: clientId },
-        select: {
-          id:             true,
-          name:           true,
-          email:          true,
-          phone:          true,
-          status:         true,
-          intakeStatus:   true,
-          isVerified:     true,
-          isArchived:     true,
-          assignedToId:   true,
-          assigneeName:   true,
-          lawyerId:       true,
-          createdAt:      true,
-          updatedAt:      true,
-          intakeProfile:  true,
-          dischargeSnapshots: {
-            orderBy: { createdAt: 'desc' },
-          },
-          documents: {
-            orderBy: { createdAt: 'desc' },
-            select: {
-              id:           true,
-              fileName:     true,
-              fileUrl:      true,
-              documentType: true,
-              mimeType:     true,
-              sizeBytes:    true,
-              uploadedBy:   true,
-              clientId:     true,
-              lawyerId:     true,
-              uploadedAt:   true,
-              createdAt:    true,
-            },
-          },
-        },
+        select: clientProfileSelect,
       });
+      const profile = client
+        ? normalizeCaseProfile(client, 'client')
+        : await findBorrowerProfile(prisma, clientId).then((borrower) =>
+            borrower ? normalizeCaseProfile(borrower, 'borrower') : null
+          );
 
-      if (!client) {
+      if (!profile) {
         console.log("[DEBUG] 360 Profile Not Found in DB for ID:", req.params.id);
-        res.status(404).json({ error: 'Client not found.' });
+        res.status(404).json({ error: 'Client or borrower not found.' });
         return;
       }
 
-      res.status(200).json({ client: withNameParts(client) });
+      res.status(200).json({ client: profile });
     } catch (error) {
       console.error("[DEBUG] Prisma Error fetching profile:", error);
       next(error);
