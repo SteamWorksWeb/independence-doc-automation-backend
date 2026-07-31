@@ -87,9 +87,15 @@ app.get('/health', (_req: Request, res: Response) => {
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRouter);        // legacy path — kept for frontend compat
 app.use('/api/v1/auth', authRouter);     // versioned alias (POST /api/v1/auth/login)
+app.use('/api/clients', clientRouter);   // legacy path — kept for frontend proxy compat
+app.use('/api/intake', intakeRouter);    // legacy path — kept for frontend proxy compat
+app.use('/api/admin', adminRouter);      // legacy path — kept for frontend proxy compat
 app.use('/api/v1/clients', clientRouter);
 app.use('/api/v1/intake', intakeRouter);
 app.use('/api/v1/admin', adminRouter);
+app.use('/api/conversations', conversationsRouter); // legacy staff messaging path
+app.use('/api/client/messages', clientMessagesRouter); // legacy borrower messaging path
+app.use('/api/client/documents', clientDocumentsRouter); // legacy borrower document path
 app.use('/api/v1/conversations', conversationsRouter); // staff messaging (slice 2)
 app.use('/api/v1/client/messages', clientMessagesRouter); // borrower messaging (slice 3)
 app.use('/api/v1/client/documents', clientDocumentsRouter); // borrower document hub

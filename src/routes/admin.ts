@@ -1590,6 +1590,46 @@ router.get(
 );
 
 // =============================================================================
+// GET /api/v1/admin/leads
+//
+// Canonical alias for GET /discharge-snapshots. The deployed admin frontend
+// calls the Leads terminology endpoint, while this production branch still uses
+// the DischargeSnapshot Prisma model internally.
+// =============================================================================
+
+router.get(
+  '/leads',
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+
+      const snapshots = await prisma.dischargeSnapshot.findMany({
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          client: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              status: true,
+              createdAt: true,
+              intakeProfile: true,
+            },
+          },
+        },
+      });
+
+      console.log(`[admin] GET /leads - Fetched ${snapshots.length} discharge snapshot(s)`);
+
+      res.status(200).json({ snapshots });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
 // POST /api/v1/admin/discharge-snapshots
 //
 // Creates a DischargeSnapshot linked to an existing or newly-upserted Client.
