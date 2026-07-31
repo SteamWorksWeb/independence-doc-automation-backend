@@ -24,6 +24,7 @@
 //   DELETE /api/v1/admin/discharge-snapshots/:id — Permanently delete a snapshot and its parent client record
 //   PATCH  /api/v1/admin/discharge-snapshots/:id/status — Update the pipeline status of a discharge snapshot
 //   POST   /api/v1/admin/borrowers/invite     — Invite a borrower (pre-client) to the Discharge Snapshot pipeline
+//   POST   /api/v1/admin/leads/invite         — Alias for /borrowers/invite (Leads terminology, used by InviteBorrowerModal)
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
@@ -1623,6 +1624,102 @@ router.get(
       console.log(`[admin] GET /leads - Fetched ${snapshots.length} discharge snapshot(s)`);
 
       res.status(200).json({ snapshots });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// POST /api/v1/admin/leads/invite
+//
+// Canonical alias for POST /borrowers/invite, introduced during the Leads
+// terminology overhaul. The InviteBorrowerModal on the frontend now POSTs to
+// /leads/invite — this handler is functionally identical to /borrowers/invite.
+//
+// Creates a secure invitation for a lead (pre-client borrower) to begin the
+// intake flow.
+//
+// Flow:
+//   1. Lawyer provides the lead's email address
+//   2. Backend generates a 32-byte crypto-random token (256 bits of entropy)
+//   3. Saves an Invitation record with a 7-day expiry window
+//   4. Sends a borrower-specific invite email via Resend
+//   5. Returns the invitation record and intake link in the response
+//
+// Request body (JSON):
+//   { email: string }  — Lead email to invite (required)
+//
+// Responses:
+//   201  { invitation: { id, email, token, expiresAt }, intakeLink: string }
+//   400  { error: string }   — Missing or invalid email
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.post(
+  '/leads/invite',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const { email } = req.body as { email?: string };
+
+      // ── Validate email presence ───────────────────────────────────────────
+      if (!email?.trim()) {
+        res.status(400).json({ error: 'Email address is required' });
+        return;
+      }
+
+      // ── Validate email format ─────────────────────────────────────────────
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        res.status(400).json({ error: 'Invalid email address format' });
+        return;
+      }
+
+      const normalizedEmail = email.trim().toLowerCase();
+
+      // ── Generate secure token ─────────────────────────────────────────────
+      //   32 bytes → 64-char hex string → 256 bits of entropy.
+      const token = crypto.randomBytes(32).toString('hex');
+
+      // ── Set expiration: 7 days from now ───────────────────────────────────
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      // ── Persist invitation ────────────────────────────────────────────────
+      const prisma     = getPrisma();
+      const invitation = await prisma.invitation.create({
+        data: {
+          email:    normalizedEmail,
+          token,
+          expiresAt,
+          lawyerId,
+        },
+        select: {
+          id:        true,
+          email:     true,
+          token:     true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      // ── Build intake link ─────────────────────────────────────────────────
+      const frontendUrl = process.env.FRONTEND_URL ?? 'https://independence-doc-automation.vercel.app';
+      const intakeLink  = `${frontendUrl}/intake?token=${token}`;
+
+      // ── Dispatch borrower-specific email via Resend ───────────────────────
+      await sendBorrowerInviteEmail(normalizedEmail, intakeLink);
+
+      console.log(`[admin] ✅ Lead intake invitation dispatched to ${normalizedEmail} via /leads/invite`);
+
+      // ── Return invitation record ──────────────────────────────────────────
+      res.status(201).json({
+        invitation,
+        intakeLink,
+      });
+
     } catch (err) {
       next(err);
     }
