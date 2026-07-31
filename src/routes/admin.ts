@@ -23,7 +23,9 @@
 //   POST   /api/v1/admin/discharge-snapshots  — Submit discharge wizard payload (upsert client + create snapshot)
 //   DELETE /api/v1/admin/discharge-snapshots/:id — Permanently delete a snapshot and its parent client record
 //   PATCH  /api/v1/admin/discharge-snapshots/:id/status — Update the pipeline status of a Lead Intake
+//   GET    /api/v1/admin/leads                — Canonical alias: returns same LeadIntake list as GET /discharge-snapshots
 //   POST   /api/v1/admin/leads/invite          — Invite a lead into the intake pipeline
+
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
@@ -1581,6 +1583,56 @@ router.get(
       });
 
       console.log(`[admin] ðŸ“‹ Fetched ${snapshots.length} Lead Intake(s)`);
+
+      res.status(200).json({ snapshots });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// GET /api/v1/admin/leads
+//
+// Canonical alias for GET /discharge-snapshots.
+//
+// The frontend proxy (src/app/api/admin/leads/route.ts) and several page
+// components call /api/v1/admin/leads to fetch the Lead Intake pipeline list.
+// This route delegates to the same Prisma query as /discharge-snapshots so
+// both URLs return identical payloads — no data duplication.
+//
+// Responses:
+//   200  { snapshots: (LeadIntake & { client: Client })[] }
+//         — Same shape as GET /discharge-snapshots.
+//   401  { error: string }   — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
+// =============================================================================
+
+router.get(
+  '/leads',
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+
+      const snapshots = await prisma.leadIntake.findMany({
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          client: {
+            select: {
+              id:            true,
+              name:          true,
+              email:         true,
+              phone:         true,
+              status:        true,
+              createdAt:     true,
+              intakeProfile: true,
+            },
+          },
+        },
+      });
+
+      console.log(`[admin] 📋 GET /leads — Fetched ${snapshots.length} Lead Intake(s)`);
 
       res.status(200).json({ snapshots });
     } catch (err) {
