@@ -44,19 +44,42 @@ for (const key of REQUIRED_ENV) {
 }
 
 const PORT = parseInt(process.env.PORT as string, 10);
-const CORS_ORIGINS = (process.env.CORS_ORIGINS as string)
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean);
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://apply.theindependencelaw.com',
+];
+
+function normalizeAllowedOrigin(rawOrigin: string): string | null {
+  const trimmed = rawOrigin.trim();
+  if (!trimmed || trimmed === '*') return null;
+
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+const CORS_ORIGINS = Array.from(
+  new Set(
+    [
+      ...DEFAULT_ALLOWED_ORIGINS,
+      ...(process.env.CORS_ORIGINS as string).split(','),
+      process.env.FRONTEND_URL as string,
+    ]
+      .map((origin) => normalizeAllowedOrigin(origin))
+      .filter((origin): origin is string => Boolean(origin))
+  )
+);
 
 // ── Express app ───────────────────────────────────────────────────────────────
 const app = express();
 
 // ── CORS — strict allowlist, no wildcard ─────────────────────────────────────
 //
-//   We derive the allowed-origin list exclusively from CORS_ORIGINS in .env.
-//   A wildcard '*' is never permitted. Any request from an origin not on the
-//   list will receive a CORS error before it hits any route handler.
+//   We derive the allowed-origin list from exact production defaults plus
+//   CORS_ORIGINS / FRONTEND_URL in the environment. A wildcard '*' is never
+//   permitted. Any request from an origin not on the list will receive a CORS
+//   error before it hits any route handler.
 //
 app.use(
   cors({

@@ -65,6 +65,10 @@ function getPrisma(): PrismaClient {
   return _prisma;
 }
 
+function getFrontendUrl(): string {
+  return (process.env.FRONTEND_URL ?? 'https://independence-doc-automation.vercel.app').replace(/\/+$/, '');
+}
+
 // ── Extend Express Request to carry the authenticated lawyerId ────────────────
 export interface LawyerRequest extends Request {
   lawyerId: string;
@@ -956,7 +960,7 @@ router.post(
       });
 
       // ── Build invite link and dispatch email via Resend ───────────────────────────
-      const inviteLink = `https://independence-doc-automation.vercel.app/login?token=${token}`;
+      const inviteLink = `${getFrontendUrl()}/login?token=${token}`;
 
       await sendInviteEmail(normalizedEmail, inviteLink);
 
@@ -1706,7 +1710,7 @@ router.post(
       });
 
       // ── Build intake link ─────────────────────────────────────────────────
-      const frontendUrl = process.env.FRONTEND_URL ?? 'https://independence-doc-automation.vercel.app';
+      const frontendUrl = getFrontendUrl();
       const intakeLink  = `${frontendUrl}/intake?token=${token}`;
 
       // ── Dispatch borrower-specific email via Resend ───────────────────────
@@ -2089,7 +2093,7 @@ router.post(
 
       // ── Build borrower invite link ────────────────────────────────────────
       //   Sends the borrower directly into the intake setup flow.
-      const frontendUrl  = process.env.FRONTEND_URL ?? 'https://independence-doc-automation.vercel.app';
+      const frontendUrl  = getFrontendUrl();
       const intakeLink   = `${frontendUrl}/intake?token=${token}`;
 
       // ── Dispatch borrower-specific email via Resend ───────────────────────
