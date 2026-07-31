@@ -396,7 +396,7 @@ router.post(
 
         if (!client) return null;
 
-        const latestSnapshot = await tx.dischargeSnapshot.findFirst({
+        const latestSnapshot = await tx.leadIntake.findFirst({
           where: { clientId },
           orderBy: { createdAt: 'desc' },
           select: { id: true },
@@ -454,11 +454,11 @@ router.post(
         };
 
         const snapshot = latestSnapshot
-          ? await tx.dischargeSnapshot.update({
+          ? await tx.leadIntake.update({
               where: { id: latestSnapshot.id },
               data: snapshotData,
             })
-          : await tx.dischargeSnapshot.create({
+          : await tx.leadIntake.create({
               data: {
                 clientId,
                 hasFederalLoans: 'unsure',
@@ -470,7 +470,7 @@ router.post(
       });
 
       if (!result) {
-        res.status(404).json({ error: 'Borrower not found' });
+        res.status(404).json({ error: 'Lead not found' });
         return;
       }
 
@@ -515,7 +515,7 @@ router.post(
       const flaggedDocuments = evaluateExpenses(expenses);
       const prisma = getPrisma();
 
-      const latestSnapshot = await prisma.dischargeSnapshot.findFirst({
+      const latestSnapshot = await prisma.leadIntake.findFirst({
         where: { clientId },
         orderBy: { createdAt: 'desc' },
         select: { id: true },
@@ -534,11 +534,11 @@ router.post(
       };
 
       const snapshot = latestSnapshot
-        ? await prisma.dischargeSnapshot.update({
+        ? await prisma.leadIntake.update({
             where: { id: latestSnapshot.id },
             data: snapshotData,
           })
-        : await prisma.dischargeSnapshot.create({
+        : await prisma.leadIntake.create({
             data: {
               clientId,
               hasFederalLoans: 'unsure',

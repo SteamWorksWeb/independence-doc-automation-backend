@@ -59,7 +59,7 @@ router.get(
       const clientId = (req as ClientRequest).clientId;
       const prisma = getPrisma();
 
-      const latestSnapshot = await prisma.dischargeSnapshot.findFirst({
+      const latestSnapshot = await prisma.leadIntake.findFirst({
         where: { clientId },
         orderBy: { createdAt: 'desc' },
         select: { flaggedDocuments: true },

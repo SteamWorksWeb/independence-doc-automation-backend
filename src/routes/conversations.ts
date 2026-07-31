@@ -201,18 +201,18 @@ router.get(
       const lawyerId   = (req as LawyerRequest).lawyerId;
       const prisma     = getPrisma();
 
-      // ── Optional borrower filter ─────────────────────────────────────────
-      // If the caller passes ?borrowerId=<id> we scope the query to that
-      // borrower only. An absent or empty value returns all conversations.
-      const rawBorrowerId = req.query['borrowerId'];
-      const borrowerId    =
-        typeof rawBorrowerId === 'string' && rawBorrowerId.trim() !== ''
-          ? rawBorrowerId.trim()
+      // ── Optional lead filter ──────────────────────────────────────────────
+      // If the caller passes ?leadId=<id> we scope the query to that
+      // lead only. An absent or empty value returns all conversations.
+      const rawLeadId = req.query['leadId'];
+      const leadId    =
+        typeof rawLeadId === 'string' && rawLeadId.trim() !== ''
+          ? rawLeadId.trim()
           : undefined;
 
       const conversations = await prisma.conversation.findMany({
         orderBy: { updatedAt: 'desc' },
-        ...(borrowerId ? { where: { borrowerId } } : {}),
+        ...(leadId ? { where: { leadId } } : {}),
         select: {
           id:           true,
           status:       true,
@@ -220,8 +220,8 @@ router.get(
           createdAt:    true,
           updatedAt:    true,
 
-          // Borrower identity for the thread list row
-          borrower: {
+          // Lead identity for the thread list row
+          lead: {
             select: { id: true, name: true, email: true },
           },
 
@@ -254,7 +254,7 @@ router.get(
         id:             conv.id,
         status:         conv.status,
         assignedToId:   conv.assignedToId,
-        borrower:       conv.borrower,
+        lead:           conv.lead,
         lastActivityAt: conv.messages[0]?.createdAt ?? conv.createdAt,
         unreadCount:    conv._count.messages,
         createdAt:      conv.createdAt,
@@ -303,21 +303,21 @@ router.post(
       const lawyerId = (req as LawyerRequest).lawyerId;
       const prisma   = getPrisma();
 
-      // ── Validate borrowerId ────────────────────────────────────────────────
-      const { borrowerId } = req.body as { borrowerId?: string };
-      if (!borrowerId?.trim()) {
-        res.status(400).json({ error: 'borrowerId is required' });
+      // ── Validate leadId ────────────────────────────────────────────────────
+      const { leadId } = req.body as { leadId?: string };
+      if (!leadId?.trim()) {
+        res.status(400).json({ error: 'leadId is required' });
         return;
       }
-      const cleanBorrowerId = borrowerId.trim();
+      const cleanLeadId = leadId.trim();
 
       // ── Verify the client/borrower exists ──────────────────────────────────
       const clientExists = await prisma.client.findUnique({
-        where:  { id: cleanBorrowerId },
+        where:  { id: cleanLeadId },
         select: { id: true },
       });
       if (!clientExists) {
-        res.status(404).json({ error: 'Borrower not found' });
+        res.status(404).json({ error: 'Lead not found' });
         return;
       }
 
@@ -326,10 +326,10 @@ router.post(
       // We check first rather than using upsert so we can return the correct
       // HTTP status code (200 vs 201) to the caller.
       const existing = await prisma.conversation.findUnique({
-        where: { borrowerId: cleanBorrowerId },
+        where: { leadId: cleanLeadId },
         select: {
           id:           true,
-          borrowerId:   true,
+          leadId:       true,
           assignedToId: true,
           status:       true,
           createdAt:    true,
@@ -338,7 +338,7 @@ router.post(
       });
 
       if (existing) {
-        console.log(`[conversations] ↩ Returning existing conversation ${existing.id} for borrower ${cleanBorrowerId}`);
+        console.log(`[conversations] ↩ Returning existing conversation ${existing.id} for lead ${cleanLeadId}`);
         res.status(200).json({ conversation: existing });
         return;
       }
@@ -349,13 +349,13 @@ router.post(
       // their queue immediately.
       const created = await prisma.conversation.create({
         data: {
-          borrowerId:   cleanBorrowerId,
+          leadId:       cleanLeadId,
           assignedToId: lawyerId,
           // status omitted — Prisma uses @default(OPEN)
         },
         select: {
           id:           true,
-          borrowerId:   true,
+          leadId:       true,
           assignedToId: true,
           status:       true,
           createdAt:    true,
@@ -363,7 +363,7 @@ router.post(
         },
       });
 
-      console.log(`[conversations] ✅ Created new conversation ${created.id} for borrower ${cleanBorrowerId} by lawyer ${lawyerId}`);
+      console.log(`[conversations] ✅ Created new conversation ${created.id} for lead ${cleanLeadId} by lawyer ${lawyerId}`);
       res.status(201).json({ conversation: created });
     } catch (err) {
       next(err);
@@ -409,7 +409,7 @@ router.get(
       const conversation = await prisma.conversation.findUnique({
         where: { id },
         include: {
-          borrower: {
+          lead: {
             select: { id: true, name: true, email: true },
           },
           messages: {

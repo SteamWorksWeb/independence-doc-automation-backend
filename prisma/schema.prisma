@@ -22,7 +22,7 @@
 //      - Email lookups (login, duplicate-check) on both models
 //      - lawyerId on Client (dashboard queries, case aggregations)
 //      - verificationToken on Client (token lookup during email verification)
-//      - borrowerId on Conversation (fetch conversation for a given client)
+//      - leadId on Conversation (fetch conversation for a given client)
 //      - conversationId on Message (fetch all messages in a thread)
 //
 //   5. SNAKE_CASE TABLE NAMES — @@map() ensures DB tables use Postgres
@@ -153,17 +153,17 @@ model Client {
   // Null until the client starts intake.
   intakeProfile IntakeProfile?
 
-  // ── Discharge Snapshots (1-to-many) ────────────────────────────────────────
-  // Each wizard submission creates one DischargeSnapshot.
-  // A client may have multiple snapshots over the life of their case.
-  dischargeSnapshots DischargeSnapshot[]
+  // ── Lead Intakes (1-to-many) ──────────────────────────────────────────────
+  // Each wizard submission creates one LeadIntake record.
+  // A client may have multiple intake records over the life of their case.
+  leadIntakes LeadIntake[]
 
   // ── Documents (1-to-many) ──────────────────────────────────────────────────
   // All documents associated with this client's case archive.
   documents Document[]
 
   // ── Conversation (1-to-1) ──────────────────────────────────────────────────
-  // One structured messaging thread per borrower (@unique on borrowerId).
+  // One structured messaging thread per lead (@unique on leadId).
   conversation Conversation?
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
@@ -520,17 +520,21 @@ model Document {
 }
 
 // =============================================================================
-// DISCHARGE SNAPSHOT
+// LEAD INTAKE
 //
 // A single wizard submission from the admin 7-step discharge-eligibility wizard.
 // Stores the full financial and demographic payload collected by the frontend
 // IntakeWizard component for discharge analysis.
 //
+// Previously named "DischargeSnapshot" — renamed to LeadIntake to reflect the
+// new "Leads" terminology. The underlying DB table (discharge_snapshots) is
+// preserved via @@map to avoid any data migration.
+//
 // Relation:
-//   1-to-many from Client — a client can accumulate multiple snapshots
-//   (e.g. re-runs after circumstances change). The latest snapshot is the
-//   active one; historical snapshots serve as an audit trail.
-//   onDelete: Cascade — snapshots are removed if the Client is deleted.
+//   1-to-many from Client — a client can accumulate multiple intake records
+//   (e.g. re-runs after circumstances change). The latest record is the
+//   active one; historical records serve as an audit trail.
+//   onDelete: Cascade — records are removed if the Client is deleted.
 //
 // isDischargeable:
 //   Null until an eligibility analysis run sets it. null = "not yet analyzed";
@@ -541,12 +545,12 @@ model Document {
 //   "Analyzed"   — isDischargeable has been set by the engine.
 // =============================================================================
 
-model DischargeSnapshot {
+model LeadIntake {
   // ── Identity ───────────────────────────────────────────────────────────────
   id String @id @default(uuid())
 
   // ── 1-to-many link to Client ──────────────────────────────────────────────
-  // Not @unique — a client may have multiple snapshots over time.
+  // Not @unique — a client may have multiple intake records over time.
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
@@ -590,7 +594,7 @@ model DischargeSnapshot {
   lastAttendedSchool DateTime?
 
   // ── Analysis result ────────────────────────────────────────────────────────
-  // Null until the eligibility engine processes this snapshot.
+  // Null until the eligibility engine processes this lead intake record.
   isDischargeable Boolean?
 
   // ── Workflow status ────────────────────────────────────────────────────────
@@ -601,11 +605,11 @@ model DischargeSnapshot {
   updatedAt DateTime @updatedAt
 
   // ── Indexes ────────────────────────────────────────────────────────────────
-  // clientId: primary query path — fetch all snapshots for a given client.
+  // clientId: primary query path — fetch all lead intakes for a given client.
   @@index([clientId])
-  // clientId + createdAt: supports date-sorted snapshot queries.
+  // clientId + createdAt: supports date-sorted lead intake queries.
   @@index([clientId, createdAt])
-  // ── Table name ─────────────────────────────────────────────────────────────
+  // ── Table name — preserves the existing discharge_snapshots DB table ────────
   @@map("discharge_snapshots")
 }
 
@@ -625,7 +629,7 @@ enum ConvStatus {
 
 enum SenderType {
   STAFF
-  BORROWER
+  BORROWER // kept for DB compatibility — represents a Lead/Client message
 }
 
 enum Visibility {
@@ -636,12 +640,13 @@ enum Visibility {
 // =============================================================================
 // CONVERSATION
 //
-// One persistent thread per borrower (@unique on borrowerId enforces 1:1).
+// One persistent thread per lead (@unique on leadId enforces 1:1).
 //
-// borrowerId (@unique):
+// leadId (@unique):
 //   Hard FK to Client. The @unique constraint means one Conversation per
-//   client — the database enforces this, not just the application layer.
+//   client/lead — the database enforces this, not just the application layer.
 //   onDelete: Cascade — thread and all messages removed with the client.
+//   DB column name preserved as "borrower_id" via @map for zero-migration deploy.
 //
 // assignedToId (optional):
 //   The Lawyer currently handling this thread. Null = unassigned.
@@ -649,7 +654,7 @@ enum Visibility {
 //
 // status (ConvStatus):
 //   OPEN            — Thread is active; staff is engaged.
-//   AWAITING_CLIENT — Staff has replied; waiting for borrower response.
+//   AWAITING_CLIENT — Staff has replied; waiting for lead response.
 //   RESOLVED        — Thread closed; no further action expected.
 // =============================================================================
 
@@ -657,10 +662,11 @@ model Conversation {
   // ── Identity ───────────────────────────────────────────────────────────────
   id String @id @default(cuid())
 
-  // ── Borrower (1-to-1) ──────────────────────────────────────────────────────
-  // @unique enforces exactly one Conversation per Client at the DB level.
-  borrowerId String @unique
-  borrower   Client @relation(fields: [borrowerId], references: [id], onDelete: Cascade)
+  // ── Lead (1-to-1) ──────────────────────────────────────────────────────────
+  // @unique enforces exactly one Conversation per Client/Lead at the DB level.
+  // @map("borrower_id") preserves the existing DB column — no migration needed.
+  leadId String @unique @map("borrower_id")
+  lead   Client @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   // ── Assigned staff (optional) ──────────────────────────────────────────────
   // The lawyer responsible for this thread. Null = unassigned inbox.

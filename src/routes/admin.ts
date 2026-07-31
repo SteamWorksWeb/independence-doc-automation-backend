@@ -22,8 +22,8 @@
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
 //   POST   /api/v1/admin/discharge-snapshots  — Submit discharge wizard payload (upsert client + create snapshot)
 //   DELETE /api/v1/admin/discharge-snapshots/:id — Permanently delete a snapshot and its parent client record
-//   PATCH  /api/v1/admin/discharge-snapshots/:id/status — Update the pipeline status of a discharge snapshot
-//   POST   /api/v1/admin/borrowers/invite     — Invite a borrower (pre-client) to the Discharge Snapshot pipeline
+//   PATCH  /api/v1/admin/discharge-snapshots/:id/status — Update the pipeline status of a Lead Intake
+//   POST   /api/v1/admin/leads/invite          — Invite a lead into the intake pipeline
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
@@ -141,7 +141,7 @@ const router = Router();
 // Apply the lawyer JWT guard to every route in this router.
 router.use(requireLawyerJwt);
 
-type CaseProfileSource = 'client' | 'borrower';
+type CaseProfileSource = 'client' | 'lead';
 type CaseProfileRecord = Record<string, unknown> & {
   id: string;
   name?: string | null;
@@ -157,7 +157,7 @@ type CaseProfileRecord = Record<string, unknown> & {
   createdAt?: Date | string | null;
   updatedAt?: Date | string | null;
   intakeProfile?: unknown;
-  dischargeSnapshots?: unknown;
+  leadIntakes?: unknown;
   documents?: unknown;
 };
 
@@ -196,7 +196,7 @@ const clientProfileSelect = {
   createdAt:      true,
   updatedAt:      true,
   intakeProfile:  true,
-  dischargeSnapshots: {
+  leadIntakes: {
     orderBy: { createdAt: 'desc' },
   },
   documents: {
@@ -218,7 +218,7 @@ function buildDocumentSelect(prisma: PrismaClient): Record<string, true> | typeo
     'sizeBytes',
     'uploadedBy',
     'clientId',
-    'borrowerId',
+    'leadId',
     'lawyerId',
     'uploadedAt',
     'createdAt',
@@ -246,9 +246,9 @@ function hasModelField(prisma: PrismaClient, modelName: string, fieldName: strin
   return fields.size === 0 || fields.has(fieldName);
 }
 
-function buildBorrowerProfileSelect(prisma: PrismaClient): Record<string, unknown> | undefined {
-  const borrowerFields = getPrismaModelFields(prisma, 'Borrower');
-  if (borrowerFields.size === 0) return undefined;
+function buildLeadProfileSelect(prisma: PrismaClient): Record<string, unknown> | undefined {
+  const leadFields = getPrismaModelFields(prisma, 'Lead');
+  if (leadFields.size === 0) return undefined;
 
   const scalarFields = [
     'id',
@@ -272,17 +272,17 @@ function buildBorrowerProfileSelect(prisma: PrismaClient): Record<string, unknow
 
   const select: Record<string, unknown> = Object.fromEntries(
     scalarFields
-      .filter((field) => borrowerFields.has(field))
+      .filter((field) => leadFields.has(field))
       .map((field) => [field, true])
   );
 
-  if (borrowerFields.has('intakeProfile')) {
+  if (leadFields.has('intakeProfile')) {
     select['intakeProfile'] = true;
   }
-  if (borrowerFields.has('dischargeSnapshots')) {
-    select['dischargeSnapshots'] = { orderBy: { createdAt: 'desc' } };
+  if (leadFields.has('leadIntakes')) {
+    select['leadIntakes'] = { orderBy: { createdAt: 'desc' } };
   }
-  if (borrowerFields.has('documents')) {
+  if (leadFields.has('documents')) {
     select['documents'] = {
       orderBy: { createdAt: 'desc' },
       select:  buildDocumentSelect(prisma),
@@ -292,32 +292,32 @@ function buildBorrowerProfileSelect(prisma: PrismaClient): Record<string, unknow
   return Object.keys(select).length ? select : undefined;
 }
 
-async function attachBorrowerProfileRelations(
+async function attachLeadProfileRelations(
   prisma: PrismaClient,
-  borrower: CaseProfileRecord
+  lead: CaseProfileRecord
 ): Promise<CaseProfileRecord> {
-  const relationId = String(borrower.clientId ?? borrower.id);
-  const enriched: CaseProfileRecord = { ...borrower };
+  const relationId = String(lead.clientId ?? lead.id);
+  const enriched: CaseProfileRecord = { ...lead };
 
   if (enriched.intakeProfile === undefined) {
     if (hasModelField(prisma, 'IntakeProfile', 'clientId')) {
       enriched.intakeProfile = await prisma.intakeProfile.findUnique({
         where: { clientId: relationId },
       });
-    } else if (hasModelField(prisma, 'IntakeProfile', 'borrowerId')) {
+    } else if (hasModelField(prisma, 'IntakeProfile', 'leadId')) {
       enriched.intakeProfile = await prisma.intakeProfile.findFirst({
-        where: { borrowerId: relationId },
+        where: { leadId: relationId },
       } as never);
     }
   }
 
-  if (enriched.dischargeSnapshots === undefined) {
-    const snapshotOwnerField = hasModelField(prisma, 'DischargeSnapshot', 'clientId')
+  if (enriched.leadIntakes === undefined) {
+    const intakeOwnerField = hasModelField(prisma, 'LeadIntake', 'clientId')
       ? 'clientId'
-      : 'borrowerId';
+      : 'leadId';
 
-    enriched.dischargeSnapshots = await prisma.dischargeSnapshot.findMany({
-      where:   { [snapshotOwnerField]: relationId },
+    enriched.leadIntakes = await prisma.leadIntake.findMany({
+      where:   { [intakeOwnerField]: relationId },
       orderBy: { createdAt: 'desc' },
     } as never);
   }
@@ -325,7 +325,7 @@ async function attachBorrowerProfileRelations(
   if (enriched.documents === undefined) {
     const documentOwnerField = hasModelField(prisma, 'Document', 'clientId')
       ? 'clientId'
-      : 'borrowerId';
+      : 'leadId';
 
     enriched.documents = await prisma.document.findMany({
       where:   { [documentOwnerField]: relationId },
@@ -337,21 +337,21 @@ async function attachBorrowerProfileRelations(
   return enriched;
 }
 
-async function findBorrowerProfile(
+async function findLeadProfile(
   prisma: PrismaClient,
   id: string
 ): Promise<CaseProfileRecord | null> {
-  const borrowerDelegate = (prisma as PrismaWithOptionalBorrower).borrower;
-  if (!borrowerDelegate) return null;
+  const leadDelegate = (prisma as PrismaWithOptionalBorrower).borrower;
+  if (!leadDelegate) return null;
 
-  const select = buildBorrowerProfileSelect(prisma);
-  const borrower = await borrowerDelegate.findUnique({
+  const select = buildLeadProfileSelect(prisma);
+  const lead = await leadDelegate.findUnique({
     where: { id },
     ...(select ? { select } : {}),
   });
 
-  if (!borrower) return null;
-  return attachBorrowerProfileRelations(prisma, borrower);
+  if (!lead) return null;
+  return attachLeadProfileRelations(prisma, lead);
 }
 
 function normalizeCaseProfile(
@@ -362,8 +362,8 @@ function normalizeCaseProfile(
     .filter((part): part is string => typeof part === 'string' && part.trim() !== '')
     .join(' ');
   const name = record.name ?? record.fullName ?? fallbackName;
-  const dischargeSnapshots = Array.isArray(record.dischargeSnapshots)
-    ? record.dischargeSnapshots
+  const leadIntakes = Array.isArray(record.leadIntakes)
+    ? record.leadIntakes
     : [];
   const documents = Array.isArray(record.documents)
     ? record.documents
@@ -381,7 +381,7 @@ function normalizeCaseProfile(
     assigneeName:       record.assigneeName ?? null,
     lawyerId:           record.lawyerId ?? null,
     intakeProfile:      record.intakeProfile ?? null,
-    dischargeSnapshots,
+    leadIntakes,
     documents,
   });
 }
@@ -525,13 +525,13 @@ router.get(
       });
       const profile = client
         ? normalizeCaseProfile(client, 'client')
-        : await findBorrowerProfile(prisma, clientId).then((borrower) =>
-            borrower ? normalizeCaseProfile(borrower, 'borrower') : null
+        : await findLeadProfile(prisma, clientId).then((lead) =>
+            lead ? normalizeCaseProfile(lead, 'lead') : null
           );
 
       if (!profile) {
         console.log("[DEBUG] 360 Profile Not Found in DB for ID:", req.params.id);
-        res.status(404).json({ error: 'Client or borrower not found.' });
+        res.status(404).json({ error: 'Client or lead not found.' });
         return;
       }
 
@@ -861,10 +861,10 @@ router.delete(
       }
 
       await prisma.$transaction([
-        prisma.dischargeSnapshot.deleteMany({ where: { clientId } }),
+        prisma.leadIntake.deleteMany({ where: { clientId } }),
         prisma.intakeProfile.deleteMany({ where: { clientId } }),
         prisma.document.deleteMany({ where: { clientId } }),
-        prisma.conversation.deleteMany({ where: { borrowerId: clientId } }),
+        prisma.conversation.deleteMany({ where: { leadId: clientId } }),
         prisma.client.delete({ where: { id: clientId } }),
       ]);
 
@@ -1075,7 +1075,7 @@ router.delete(
 //
 // Fetches the full conversation thread for a specific client, ordered
 // chronologically (oldest first) so the frontend can render top-to-bottom.
-// Routes through the Conversation model (borrowerId → Conversation → messages).
+// Routes through the Conversation model (leadId → Conversation → messages).
 //
 // Path param:
 //   :id — the client's UUID
@@ -1109,7 +1109,7 @@ router.get(
       // ── Fetch messages through the Conversation thread ────────────────────
       // The Conversation record may not exist yet (thread is created lazily).
       const conversation = await prisma.conversation.findUnique({
-        where: { borrowerId: clientId },
+        where: { leadId: clientId },
         include: {
           messages: {
             where:   { deletedAt: null },
@@ -1142,7 +1142,7 @@ router.get(
 // authenticated lawyer. senderType is hardcoded to STAFF; senderUserId is
 // extracted from the JWT payload (req.lawyerId set by requireLawyerJwt).
 //
-// Lazily creates the Conversation record (borrowerId → client) if it does
+// Lazily creates the Conversation record (leadId → client) if it does
 // not yet exist so the first staff message bootstraps the thread.
 //
 // Path param:
@@ -1188,8 +1188,8 @@ router.post(
 
       // ── Lazily upsert Conversation — first staff message creates the thread
       const conversation = await prisma.conversation.upsert({
-        where:  { borrowerId: clientId },
-        create: { borrowerId: clientId, assignedToId: lawyerId },
+        where:  { leadId: clientId },
+        create: { leadId: clientId, assignedToId: lawyerId },
         update: { updatedAt: new Date() },
         select: { id: true },
       });
@@ -1536,15 +1536,15 @@ router.get(
 // =============================================================================
 // GET /api/v1/admin/discharge-snapshots
 //
-// Returns all DischargeSnapshot records across every client, ordered newest-
-// first (updatedAt DESC). Designed for the admin Discharge Snapshot table that
+// Returns all LeadIntake records across every client, ordered newest-
+// first (updatedAt DESC). Designed for the admin Lead Intake table that
 // replaces hardcoded mock data on the frontend.
 //
 // Each snapshot includes the full `client` relation so the frontend can display
 // the borrower's name (sourced from client.name) without a secondary lookup.
 //
 // Responses:
-//   200  { snapshots: (DischargeSnapshot & { client: Client })[] }
+//   200  { snapshots: (LeadIntake & { client: Client })[] }
 //         â€” Flat array of all snapshot records with embedded client object.
 //           Array is empty when no snapshots have been submitted yet.
 //   401  { error: string }   â€” Missing or invalid JWT (handled by router.use)
@@ -1558,7 +1558,7 @@ router.get(
     try {
       const prisma = getPrisma();
 
-      const snapshots = await prisma.dischargeSnapshot.findMany({
+      const snapshots = await prisma.leadIntake.findMany({
         orderBy: { updatedAt: 'desc' },
         include: {
           // Include the client record so the frontend table can render the borrower
@@ -1580,7 +1580,7 @@ router.get(
         },
       });
 
-      console.log(`[admin] ðŸ“‹ Fetched ${snapshots.length} discharge snapshot(s)`);
+      console.log(`[admin] ðŸ“‹ Fetched ${snapshots.length} Lead Intake(s)`);
 
       res.status(200).json({ snapshots });
     } catch (err) {
@@ -1592,7 +1592,7 @@ router.get(
 // =============================================================================
 // POST /api/v1/admin/discharge-snapshots
 //
-// Creates a DischargeSnapshot linked to an existing or newly-upserted Client.
+// Creates a LeadIntake linked to an existing or newly-upserted Client.
 //
 // The 7-step discharge wizard collects two categories of data:
 //   1. Basic client identity (firstName, lastName, email, phone)
@@ -1601,7 +1601,7 @@ router.get(
 // Strategy — upsert then create:
 //   • We look up the client by email. If they already exist we update their
 //     name; if not, we create them. Prisma upsert handles both.
-//   • After the upsert we create the DischargeSnapshot connected to that
+//   • After the upsert we create the LeadIntake connected to that
 //     client via clientId.
 //
 // Note on lawyerId:
@@ -1636,7 +1636,7 @@ router.get(
 //   }
 //
 // Responses:
-//   201  { client, snapshot }  — Created
+//   201  { client, leadIntake }  — Created
 //   400  { error: string }    — Missing required field
 //   401  { error: string }    — Missing or invalid JWT
 //   403  { error: string }    — Valid JWT but role !== 'lawyer'
@@ -1806,12 +1806,12 @@ router.post(
         },
       });
 
-      // â”€â”€ Create DischargeSnapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â”€â”€ Create LeadIntake â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // All optional numeric fields are coerced through toFloat()/toInt() so
       // that empty strings and undefined values become null rather than NaN.
       // All boolean fields are coerced through toBool() so that "Yes"/"No"
       // dropdown strings are converted to proper Prisma Boolean values.
-      const snapshot = await prisma.dischargeSnapshot.create({
+      const leadIntake = await prisma.leadIntake.create({
         data: {
           clientId:               client.id,
           hasFederalLoans:        hasFederalLoans.trim(),
@@ -1836,10 +1836,10 @@ router.post(
       });
 
       console.log(
-        `[admin] ðŸ“‹ DischargeSnapshot ${snapshot.id} created for client ${client.id} (${normalizedEmail})`
+        `[admin] ðŸ“‹ LeadIntake ${leadIntake.id} created for client ${client.id} (${normalizedEmail})`
       );
 
-      res.status(201).json({ client, snapshot });
+      res.status(201).json({ client, leadIntake });
     } catch (err) {
       // â”€â”€ Aggressive error logging â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // Log the full request body alongside the raw Prisma error so we can
@@ -1855,7 +1855,7 @@ router.post(
         errName === 'PrismaClientKnownRequestError'
       ) {
         res.status(400).json({
-          error: 'Validation error: invalid or missing fields in discharge snapshot payload.',
+          error: 'Validation error: invalid or missing fields in Lead Intake payload.',
           detail: (err as Error).message,
         });
         return;
@@ -1867,10 +1867,10 @@ router.post(
 );
 
 // =============================================================================
-// POST /api/v1/admin/borrowers/invite
+// POST /api/v1/admin/leads/invite
 //
 // Creates a secure invitation for a BORROWER (pre-client Lead) to begin the
-// Discharge Snapshot intake flow. This endpoint is intentionally isolated from
+// Lead Intake intake flow. This endpoint is intentionally isolated from
 // POST /invites (the client portal invite) — they serve different onboarding
 // journeys and must not be conflated.
 //
@@ -1880,7 +1880,7 @@ router.post(
 //   3. Saves an Invitation record with a 7-day expiry window (same model as
 //      client invites — no schema change required)
 //   4. Sends a borrower-specific email via Resend:
-//        Subject: "Action Required: Complete Your Discharge Snapshot Intake Questionnaire"
+//        Subject: "Action Required: Complete Your Lead Intake Intake Questionnaire"
 //        Body: Never uses the word "Client" — addresses the recipient as a borrower
 //   5. Returns the invitation record in the response
 //
@@ -1901,7 +1901,7 @@ router.post(
 // =============================================================================
 
 router.post(
-  '/borrowers/invite',
+  '/leads/invite',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const lawyerId = (req as LawyerRequest).lawyerId;
@@ -1977,21 +1977,21 @@ router.post(
 // =============================================================================
 // DELETE /api/v1/admin/discharge-snapshots/:id
 //
-// Permanently removes a DischargeSnapshot and its associated parent Client
+// Permanently removes a LeadIntake and its associated parent Client
 // record from the database. Because our architecture equates a Borrower with
 // a Client, deleting only the snapshot would leave an orphaned Client row.
 // A Prisma transaction is used to delete both atomically — either both
 // records are removed or neither is.
 //
 // Path param:
-//   :id — the DischargeSnapshot UUID
+//   :id — the LeadIntake UUID
 //
 // Delete order inside the transaction (respects FK constraints):
-//   1. DischargeSnapshot  (child — references clientId)
-//   2. Client             (parent — id === snapshot.clientId)
+//   1. LeadIntake  (child — references clientId)
+//   2. Client             (parent — id === leadIntake.clientId)
 //
 // Responses:
-//   200  { message: 'Borrower permanently deleted' }  — Both records removed
+//   200  { message: 'Lead permanently deleted' }  — Both records removed
 //   404  { error: string }   — No snapshot found for the given id
 //   401  { error: string }   — Missing or invalid JWT (handled by router.use)
 //   403  { error: string }   — Valid JWT but role !== 'lawyer'
@@ -2006,29 +2006,29 @@ router.delete(
       const snapshotId = String(req.params.id);
 
       // ── Locate the snapshot to retrieve its parent clientId ─────────────────
-      const snapshot = await prisma.dischargeSnapshot.findUnique({
+      const leadIntake = await prisma.leadIntake.findUnique({
         where:  { id: snapshotId },
         select: { id: true, clientId: true },
       });
 
-      if (!snapshot) {
-        res.status(404).json({ error: 'Discharge snapshot not found.' });
+      if (!leadIntake) {
+        res.status(404).json({ error: 'Lead intake record not found.' });
         return;
       }
 
       // ── Atomically delete snapshot + parent client ──────────────────────────
-      // Order matters: delete the child (DischargeSnapshot) first so the FK
+      // Order matters: delete the child (LeadIntake) first so the FK
       // constraint on clientId is cleared before we remove the parent (Client).
       await prisma.$transaction([
-        prisma.dischargeSnapshot.delete({ where: { id: snapshotId } }),
-        prisma.client.delete({ where: { id: snapshot.clientId } }),
+        prisma.leadIntake.delete({ where: { id: snapshotId } }),
+        prisma.client.delete({ where: { id: leadIntake.clientId } }),
       ]);
 
       console.log(
-        `[admin] 🗑️  DischargeSnapshot ${snapshotId} and parent Client ${snapshot.clientId} permanently deleted.`
+        `[admin] 🗑️  LeadIntake ${snapshotId} and parent Client ${leadIntake.clientId} permanently deleted.`
       );
 
-      res.status(200).json({ message: 'Borrower permanently deleted' });
+      res.status(200).json({ message: 'Lead permanently deleted' });
     } catch (err) {
       next(err);
     }
@@ -2043,13 +2043,13 @@ router.delete(
 // any other snapshot fields.
 //
 // Path param:
-//   :id — the DischargeSnapshot UUID
+//   :id — the LeadIntake UUID
 //
 // Request body (JSON):
 //   { status: string }  — required; the new pipeline status value
 //
 // Responses:
-//   200  { snapshot: DischargeSnapshot }  — Updated snapshot record
+//   200  { snapshot: LeadIntake }  — Updated snapshot record
 //   400  { error: string }               — Missing status field in body
 //   401  { error: string }               — Missing or invalid JWT (handled by router.use)
 //   403  { error: string }               — Valid JWT but role !== 'lawyer'
@@ -2072,24 +2072,24 @@ router.patch(
       }
 
       // ── Verify the snapshot exists ────────────────────────────────────────
-      const existing = await prisma.dischargeSnapshot.findUnique({
+      const existing = await prisma.leadIntake.findUnique({
         where:  { id: snapshotId },
         select: { id: true },
       });
 
       if (!existing) {
-        res.status(404).json({ error: 'Discharge snapshot not found.' });
+        res.status(404).json({ error: 'Lead Intake not found.' });
         return;
       }
 
       // ── Persist the status update ─────────────────────────────────────────
-      const updatedSnapshot = await prisma.dischargeSnapshot.update({
+      const updatedSnapshot = await prisma.leadIntake.update({
         where: { id: snapshotId },
         data:  { status: String(status).trim() },
       });
 
       console.log(
-        `[admin] 📋 DischargeSnapshot ${snapshotId} status updated to "${status}"`
+        `[admin] 📋 LeadIntake ${snapshotId} status updated to "${status}"`
       );
 
       res.status(200).json({ snapshot: updatedSnapshot });
@@ -2102,13 +2102,13 @@ router.patch(
 // =============================================================================
 // PUT /api/v1/admin/discharge-snapshots/:id
 //
-// Updates an existing DischargeSnapshot record with new wizard data.
+// Updates an existing LeadIntake record with new wizard data.
 //
 // Path param:
-//   :id — the DischargeSnapshot UUID
+//   :id — the LeadIntake UUID
 //
 // Responses:
-//   200  { snapshot: DischargeSnapshot }  — Updated snapshot record
+//   200  { snapshot: LeadIntake }  — Updated snapshot record
 //   400  { error: string }               — Missing fields or validation error
 //   401  { error: string }               — Missing or invalid JWT
 //   403  { error: string }               — Valid JWT but role !== 'lawyer'
@@ -2190,18 +2190,18 @@ router.put(
       }
 
       // ── Verify the snapshot exists ──────────────────────────────────────────
-      const existing = await prisma.dischargeSnapshot.findUnique({
+      const existing = await prisma.leadIntake.findUnique({
         where:  { id: snapshotId },
         select: { id: true },
       });
 
       if (!existing) {
-        res.status(404).json({ error: 'Discharge snapshot not found.' });
+        res.status(404).json({ error: 'Lead Intake not found.' });
         return;
       }
 
       // ── Persist the update ──────────────────────────────────────────────────
-      const updatedSnapshot = await prisma.dischargeSnapshot.update({
+      const updatedSnapshot = await prisma.leadIntake.update({
         where: { id: snapshotId },
         data: {
           hasFederalLoans:        hasFederalLoans?.trim()         ?? undefined,
@@ -2224,7 +2224,7 @@ router.put(
         },
       });
 
-      console.log(`[admin] 📋 DischargeSnapshot ${snapshotId} updated via PUT`);
+      console.log(`[admin] 📋 LeadIntake ${snapshotId} updated via PUT`);
 
       res.status(200).json({ snapshot: updatedSnapshot });
     } catch (err) {
@@ -2234,7 +2234,7 @@ router.put(
         errName === 'PrismaClientKnownRequestError'
       ) {
         res.status(400).json({
-          error: 'Validation error: invalid or missing fields in discharge snapshot payload.',
+          error: 'Validation error: invalid or missing fields in Lead Intake payload.',
           detail: (err as Error).message,
         });
         return;

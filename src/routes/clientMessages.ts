@@ -108,7 +108,7 @@ router.get(
       // No secondary ownership check needed — the where clause IS the ownership
       // check at the DB level.
       const conversation = await prisma.conversation.findUnique({
-        where: { borrowerId: clientId },
+        where: { leadId: clientId },
         select: {
           id:     true,
           status: true,
@@ -198,7 +198,7 @@ router.post(
       // `borrowerId: clientId` is the exclusive ownership gate — there is
       // no ID in the URL that a borrower could swap to another user's thread.
       const conversation = await prisma.conversation.findUnique({
-        where:  { borrowerId: clientId },
+        where:  { leadId: clientId },
         select: { id: true },
       });
 
