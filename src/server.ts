@@ -10,9 +10,12 @@
 //   5. Centralised error handler (no stack trace leaks to client)
 // =============================================================================
 
+import dotenv from 'dotenv';
+// Load environment variables immediately before other imports
+dotenv.config();
+
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 
 import authRouter from './routes/auth';
 import clientRouter from './routes/clients';
@@ -21,9 +24,8 @@ import adminRouter from './routes/admin';
 import conversationsRouter from './routes/conversations';
 import clientMessagesRouter from './routes/clientMessages';
 import clientDocumentsRouter from './routes/clientDocuments';
+import clientDashboardRouter from './routes/clientDashboard';
 
-// ── Load environment ──────────────────────────────────────────────────────────
-dotenv.config();
 
 // ── Validate required env vars at startup ────────────────────────────────────
 const REQUIRED_ENV = [
@@ -122,6 +124,7 @@ app.use('/api/client/documents', clientDocumentsRouter); // legacy borrower docu
 app.use('/api/v1/conversations', conversationsRouter); // staff messaging (slice 2)
 app.use('/api/v1/client/messages', clientMessagesRouter); // borrower messaging (slice 3)
 app.use('/api/v1/client/documents', clientDocumentsRouter); // borrower document hub
+app.use('/api/v1/client/dashboard', clientDashboardRouter); // borrower dashboard summary
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
