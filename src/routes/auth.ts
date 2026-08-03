@@ -91,6 +91,7 @@ router.post(
           name:         true,
           email:        true,
           passwordHash: true,
+          role:         true,
         },
       });
 
@@ -109,15 +110,17 @@ router.post(
 
       // ── Issue JWT ──────────────────────────────────────────────────────────
       //
-      //   Payload: { sub: lawyerId, role: 'lawyer' }
-      //   The `role` claim lets the frontend distinguish Lawyer JWTs from
-      //   Client JWTs without an extra API call.
+      //   Payload: { sub: lawyerId, role: 'lawyer', adminRole: AdminRole }
+      //   `role: 'lawyer'` distinguishes Lawyer JWTs from Client JWTs.
+      //   `adminRole` carries the RBAC role (SUPER_ADMIN | LAWYER) so the
+      //   requireSuperAdmin middleware can gate staff-management endpoints
+      //   without an extra DB round-trip.
       //
       const jwtSecret = process.env.JWT_SECRET as string;
       const expiresIn = (process.env.JWT_EXPIRES_IN ?? '7d') as jwt.SignOptions['expiresIn'];
 
       const token = jwt.sign(
-        { sub: lawyer.id, email: lawyer.email, role: 'lawyer' },
+        { sub: lawyer.id, email: lawyer.email, role: 'lawyer', adminRole: lawyer.role },
         jwtSecret,
         { expiresIn },
       );
@@ -126,9 +129,10 @@ router.post(
       res.status(200).json({
         token,
         lawyer: {
-          id:    lawyer.id,
-          name:  lawyer.name,
-          email: lawyer.email,
+          id:        lawyer.id,
+          name:      lawyer.name,
+          email:     lawyer.email,
+          adminRole: lawyer.role,
         },
       });
 

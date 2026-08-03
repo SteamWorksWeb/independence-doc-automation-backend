@@ -26,6 +26,7 @@ import clientMessagesRouter from './routes/clientMessages';
 import clientDocumentsRouter from './routes/clientDocuments';
 import clientDashboardRouter    from './routes/clientDashboard';
 import clientConversationsRouter from './routes/clientConversations';
+import superAdminRouter from './routes/superAdmin';
 
 
 // ── Validate required env vars at startup ────────────────────────────────────
@@ -128,6 +129,8 @@ app.use('/api/v1/client/documents', clientDocumentsRouter); // borrower document
 app.use('/api/v1/client/dashboard', clientDashboardRouter);      // borrower dashboard summary
 app.use('/api/client/conversations', clientConversationsRouter);   // legacy borrower conversations path
 app.use('/api/v1/client/conversations', clientConversationsRouter); // borrower conversations (message center)
+app.use('/api/super-admin', superAdminRouter);      // legacy super-admin path
+app.use('/api/v1/super-admin', superAdminRouter);   // RBAC: Super Admin staff management
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {

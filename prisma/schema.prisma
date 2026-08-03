@@ -48,6 +48,19 @@ datasource db {
 }
 
 // =============================================================================
+// ADMIN ROLE
+//
+// Discriminates between the firm owner (Super Admin) and standard staff (Lawyers).
+//   SUPER_ADMIN — the founding attorney; full access including staff management.
+//   LAWYER      — standard staff; can manage clients but not internal accounts.
+// =============================================================================
+
+enum AdminRole {
+  SUPER_ADMIN
+  LAWYER
+}
+
+// =============================================================================
 // LAWYER
 //
 // The authenticated administrator/attorney.
@@ -63,6 +76,11 @@ model Lawyer {
   id    String @id @default(uuid())
   name  String
   email String @unique
+
+  // ── RBAC role ──────────────────────────────────────────────────────────────
+  // Controls access to super-admin-only endpoints (staff management, etc.).
+  // Defaults to LAWYER; only the founding attorney is elevated to SUPER_ADMIN.
+  role AdminRole @default(LAWYER)
 
   // ── Credentials ────────────────────────────────────────────────────────────
   // bcrypt hash (cost 12). NEVER store plain-text passwords.
