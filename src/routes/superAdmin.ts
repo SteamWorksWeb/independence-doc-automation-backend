@@ -64,7 +64,7 @@ router.get(
     try {
       const prisma = getPrisma();
 
-      const staff = await prisma.lawyer.findMany({
+      const rows = await prisma.lawyer.findMany({
         select: {
           id:        true,
           name:      true,
@@ -73,6 +73,19 @@ router.get(
           createdAt: true,
         },
         orderBy: { createdAt: 'asc' },
+      });
+
+      // ── Split stored name into firstName / lastName for each record ───────────
+      const staff = rows.map((r) => {
+        const [first, ...rest] = r.name.split(' ');
+        return {
+          id:        r.id,
+          firstName: first,
+          lastName:  rest.join(' ') || '',
+          email:     r.email,
+          role:      r.role,
+          createdAt: r.createdAt,
+        };
       });
 
       res.status(200).json({ staff });
@@ -91,13 +104,14 @@ router.get(
 //
 // Request body (JSON):
 //   {
-//     name:  string  — Full name of the new staff member   (required)
-//     email: string  — Firm email address                  (required)
-//     role:  string  — 'LAWYER' | 'SUPER_ADMIN'            (optional, default: 'LAWYER')
+//     firstName: string  — First name of the new staff member (required)
+//     lastName:  string  — Last name of the new staff member  (required)
+//     email:     string  — Firm email address                 (required)
+//     role:      string  — 'LAWYER' | 'SUPER_ADMIN'           (optional, default: 'LAWYER')
 //   }
 //
 // Responses:
-//   201  { staff: { id, name, email, role, createdAt } }
+//   201  { staff: { id, firstName, lastName, email, role, createdAt } }
 //   400  — Missing required fields or email already in use
 //   401  — Missing / invalid JWT
 //   403  — Valid JWT but not SUPER_ADMIN
@@ -108,19 +122,21 @@ router.post(
   '/staff/invite',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { name, email, role } = req.body as {
-        name?:  string;
-        email?: string;
-        role?:  string;
+      const { firstName, lastName, email, role } = req.body as {
+        firstName?: string;
+        lastName?:  string;
+        email?:     string;
+        role?:      string;
       };
 
       // ── Validate required fields ─────────────────────────────────────────────
-      if (!name?.trim() || !email?.trim()) {
-        res.status(400).json({ error: 'Name and email are required' });
+      if (!firstName?.trim() || !lastName?.trim() || !email?.trim()) {
+        res.status(400).json({ error: 'First name, last name, and email are required' });
         return;
       }
 
       const normalizedEmail = email.trim().toLowerCase();
+      const fullName = `${firstName.trim()} ${lastName.trim()}`;
 
       // ── Validate role value ──────────────────────────────────────────────────
       const allowedRoles: string[] = [AdminRole.LAWYER, AdminRole.SUPER_ADMIN];
@@ -151,7 +167,7 @@ router.post(
       // ── Create the new staff record ──────────────────────────────────────────
       const newStaff = await prisma.lawyer.create({
         data: {
-          name:         name.trim(),
+          name:         fullName,
           email:        normalizedEmail,
           role:         assignedRole,
           passwordHash,
@@ -169,7 +185,20 @@ router.post(
         `[superAdmin] New staff created: ${newStaff.name} (${newStaff.email}) — role: ${newStaff.role}`
       );
 
-      res.status(201).json({ staff: newStaff });
+      // ── Split stored name back into firstName / lastName for the response ────
+      const [respFirst, ...rest] = newStaff.name.split(' ');
+      const respLast = rest.join(' ') || '';
+
+      res.status(201).json({
+        staff: {
+          id:        newStaff.id,
+          firstName: respFirst,
+          lastName:  respLast,
+          email:     newStaff.email,
+          role:      newStaff.role,
+          createdAt: newStaff.createdAt,
+        },
+      });
     } catch (err) {
       next(err);
     }
