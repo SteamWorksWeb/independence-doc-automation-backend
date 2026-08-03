@@ -23,8 +23,8 @@
 //   - Credentials are read exclusively from env — never hardcoded.
 // =============================================================================
 
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl }               from '@aws-sdk/s3-request-presigner';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // ── Env guard ─────────────────────────────────────────────────────────────────
 // Validated at server startup in server.ts for the core required vars.
@@ -79,6 +79,48 @@ export async function generatePresignedPutUrl(
   });
 
   return getSignedUrl(s3Client, command, { expiresIn });
+}
+
+// =============================================================================
+// generatePresignedGetUrl
+//
+// Generates a time-limited presigned GET URL that allows a browser or API
+// client to download / view a private S3 object without making it public.
+// Used by the admin document-view endpoint.
+//
+// @param s3Key     — The full S3 object key (e.g. "clients/abc/documents/xyz.pdf")
+// @param expiresIn — Seconds until the URL expires. Default: 900 (15 min).
+// @returns         — The presigned HTTPS GET URL string.
+// =============================================================================
+export async function generatePresignedGetUrl(
+  s3Key:    string,
+  expiresIn = 900,
+): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: S3_BUCKET,
+    Key:    s3Key,
+  });
+
+  return getSignedUrl(s3Client, command, { expiresIn });
+}
+
+// =============================================================================
+// deleteS3Object
+//
+// Permanently deletes an object from the S3 bucket.
+// Called by the admin document-delete endpoint BEFORE removing the DB record,
+// so that a failed S3 deletion prevents orphaned database references.
+//
+// @param s3Key — The full S3 object key to delete.
+// @returns     — Resolves when the DeleteObjectCommand completes.
+// =============================================================================
+export async function deleteS3Object(s3Key: string): Promise<void> {
+  const command = new DeleteObjectCommand({
+    Bucket: S3_BUCKET,
+    Key:    s3Key,
+  });
+
+  await s3Client.send(command);
 }
 
 // =============================================================================

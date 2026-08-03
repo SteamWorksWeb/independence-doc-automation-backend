@@ -17,6 +17,8 @@
 //   POST   /api/v1/admin/clients/:id/documents — Register a document record
 //   GET    /api/v1/admin/cases/:id            — Fetch single case (client + documents + intake)
 //   GET    /api/v1/admin/documents            — Fetch ALL documents (global archive, newest first)
+//   GET    /api/v1/admin/documents/:id/view   — Generate presigned S3 GET URL (15 min) for a document
+//   DELETE /api/v1/admin/documents/:id        — Delete document from S3 and database
 //   POST   /api/v1/admin/invites              — Create client invitation
 //   GET    /api/v1/admin/invites              — List pending invitations
 //   DELETE /api/v1/admin/invites/:id          — Revoke a pending invitation
@@ -47,6 +49,11 @@ import {
   IntakeProfileMissingError,
 } from '../services/eligibilityEngine';
 import { sendInviteEmail, sendBorrowerInviteEmail } from '../utils/email';
+import {
+  generatePresignedGetUrl,
+  deleteS3Object,
+  S3_BUCKET,
+} from '../utils/s3';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -2380,6 +2387,152 @@ router.put(
         });
         return;
       }
+      next(err);
+    }
+  }
+);
+
+
+// =============================================================================
+// GET /documents/:id/view
+//
+// Generates a presigned S3 GET URL for the requested document, allowing the
+// admin dashboard to display or download the file without making the bucket
+// public.
+//
+// ── Path params ───────────────────────────────────────────────────────────────
+//   :id — Document UUID (primary key in the Document table)
+//
+// ── Security ──────────────────────────────────────────────────────────────────
+//   Protected by requireLawyerJwt (applied to the whole router via router.use).
+//   The S3 key is derived server-side from the stored fileUrl — the client
+//   never controls which key is signed.
+//
+// ── Responses ────────────────────────────────────────────────────────────────
+//   200  { url: string }            — Presigned GET URL (valid 15 min)
+//   404  { error: string }          — Document not found
+//   500  { error: string }          — Global error handler
+// =============================================================================
+router.get(
+  '/documents/:id/view',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+      // String() cast: Express types params as string | string[]; Prisma
+      // where clause requires a plain string. Named route params always
+      // resolve to a single string value.
+      const id    = String(req.params.id);
+
+      // ── Fetch document record ───────────────────────────────────────────────
+      const doc = await prisma.document.findUnique({
+        where:  { id },
+        select: { id: true, fileUrl: true, fileName: true },
+      });
+
+      if (!doc) {
+        res.status(404).json({ error: 'Document not found.' });
+        return;
+      }
+
+      // ── Derive the S3 key from the stored fileUrl ───────────────────────────
+      // fileUrl format: https://<bucket>.s3.<region>.amazonaws.com/<s3Key>
+      // We parse the pathname (everything after the host) as the key.
+      let s3Key: string;
+      try {
+        const parsed = new URL(doc.fileUrl);
+        // pathname starts with '/' — strip it to get the bare S3 key
+        s3Key = parsed.pathname.replace(/^\//, '');
+      } catch {
+        console.error(`[admin] Could not parse fileUrl for document ${id}: ${doc.fileUrl}`);
+        res.status(500).json({ error: 'Unable to resolve document storage key.' });
+        return;
+      }
+
+      if (!s3Key) {
+        res.status(500).json({ error: 'Unable to resolve document storage key.' });
+        return;
+      }
+
+      // ── Generate presigned GET URL (15 minutes) ─────────────────────────────
+      const url = await generatePresignedGetUrl(s3Key, 900);
+
+      console.log(`[admin] 🔍 Presigned GET URL generated for document ${id} (key: ${s3Key})`);
+
+      res.status(200).json({ url });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// DELETE /documents/:id
+//
+// Permanently deletes a document: first removes the S3 object, then deletes
+// the database record. Ordering is intentional — if the S3 deletion fails the
+// DB record is preserved, preventing orphaned database entries pointing at
+// non-existent files.
+//
+// ── Path params ───────────────────────────────────────────────────────────────
+//   :id — Document UUID
+//
+// ── Security ──────────────────────────────────────────────────────────────────
+//   Protected by requireLawyerJwt (applied to the whole router via router.use).
+//
+// ── Responses ────────────────────────────────────────────────────────────────
+//   200  { message: string }        — Document deleted successfully
+//   404  { error: string }          — Document not found
+//   500  { error: string }          — Global error handler
+// =============================================================================
+router.delete(
+  '/documents/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+      // String() cast: Express types params as string | string[]; Prisma
+      // where clause requires a plain string. Named route params always
+      // resolve to a single string value.
+      const id    = String(req.params.id);
+
+      // ── Fetch document record ───────────────────────────────────────────────
+      const doc = await prisma.document.findUnique({
+        where:  { id },
+        select: { id: true, fileUrl: true, fileName: true },
+      });
+
+      if (!doc) {
+        res.status(404).json({ error: 'Document not found.' });
+        return;
+      }
+
+      // ── Derive the S3 key from the stored fileUrl ───────────────────────────
+      let s3Key: string;
+      try {
+        const parsed = new URL(doc.fileUrl);
+        s3Key = parsed.pathname.replace(/^\//, '');
+      } catch {
+        console.error(`[admin] Could not parse fileUrl for document ${id}: ${doc.fileUrl}`);
+        res.status(500).json({ error: 'Unable to resolve document storage key.' });
+        return;
+      }
+
+      if (!s3Key) {
+        res.status(500).json({ error: 'Unable to resolve document storage key.' });
+        return;
+      }
+
+      // ── 1. Delete from S3 ────────────────────────────────────────────────────
+      // Must succeed before we remove the DB record. If S3 throws, next(err)
+      // propagates to the global error handler and the DB record is preserved.
+      await deleteS3Object(s3Key);
+      console.log(`[admin] 🗑️  S3 object deleted: ${s3Key}`);
+
+      // ── 2. Delete from database ───────────────────────────────────────────────
+      await prisma.document.delete({ where: { id } });
+      console.log(`[admin] 🗑️  Document record deleted: ${id} (${doc.fileName})`);
+
+      res.status(200).json({ message: `Document '${doc.fileName}' deleted successfully.` });
+    } catch (err) {
       next(err);
     }
   }
