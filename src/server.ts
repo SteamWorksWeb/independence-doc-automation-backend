@@ -24,7 +24,8 @@ import adminRouter from './routes/admin';
 import conversationsRouter from './routes/conversations';
 import clientMessagesRouter from './routes/clientMessages';
 import clientDocumentsRouter from './routes/clientDocuments';
-import clientDashboardRouter from './routes/clientDashboard';
+import clientDashboardRouter    from './routes/clientDashboard';
+import clientConversationsRouter from './routes/clientConversations';
 
 
 // ── Validate required env vars at startup ────────────────────────────────────
@@ -124,7 +125,9 @@ app.use('/api/client/documents', clientDocumentsRouter); // legacy borrower docu
 app.use('/api/v1/conversations', conversationsRouter); // staff messaging (slice 2)
 app.use('/api/v1/client/messages', clientMessagesRouter); // borrower messaging (slice 3)
 app.use('/api/v1/client/documents', clientDocumentsRouter); // borrower document hub
-app.use('/api/v1/client/dashboard', clientDashboardRouter); // borrower dashboard summary
+app.use('/api/v1/client/dashboard', clientDashboardRouter);      // borrower dashboard summary
+app.use('/api/client/conversations', clientConversationsRouter);   // legacy borrower conversations path
+app.use('/api/v1/client/conversations', clientConversationsRouter); // borrower conversations (message center)
 
 // ── 404 catch-all ────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
