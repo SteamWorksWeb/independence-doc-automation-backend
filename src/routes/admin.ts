@@ -181,6 +181,7 @@ type PrismaWithOptionalBorrower = PrismaClient & {
 
 const profileDocumentSelect = {
   id:           true,
+  title:        true,
   fileName:     true,
   fileUrl:      true,
   documentType: true,
@@ -223,6 +224,7 @@ function buildDocumentSelect(prisma: PrismaClient): Record<string, true> | typeo
 
   const selectedFields = [
     'id',
+    'title',
     'fileName',
     'fileUrl',
     'documentType',
@@ -1280,6 +1282,7 @@ router.get(
         orderBy: { createdAt: 'desc' },
         select: {
           id:         true,
+          title:      true,
           fileName:   true,
           fileUrl:    true,
           mimeType:   true,
@@ -1335,11 +1338,13 @@ router.post(
 
       const {
         fileName,
+        title,
         fileUrl,
         mimeType,
         sizeBytes,
       } = req.body as {
         fileName?:  string;
+        title?:     string;
         fileUrl?:   string;
         mimeType?:  string;
         sizeBytes?: number;
@@ -1348,6 +1353,10 @@ router.post(
       // ── Validate required fields ────────────────────────────────────────────
       if (!fileName?.trim()) {
         res.status(400).json({ error: 'fileName is required.' });
+        return;
+      }
+      if (!title?.trim()) {
+        res.status(400).json({ error: 'title is required.' });
         return;
       }
       if (!fileUrl?.trim()) {
@@ -1378,6 +1387,7 @@ router.post(
       const newDocument = await prisma.document.create({
         data: {
           fileName:   fileName.trim(),
+          title:      title.trim(),
           fileUrl:    fileUrl.trim(),
           mimeType:   mimeType.trim(),
           sizeBytes,
@@ -1387,6 +1397,7 @@ router.post(
         },
         select: {
           id:         true,
+          title:      true,
           fileName:   true,
           fileUrl:    true,
           mimeType:   true,
@@ -1471,6 +1482,7 @@ router.get(
             orderBy: { createdAt: 'desc' },
             select: {
               id:         true,
+              title:      true,
               fileName:   true,
               fileUrl:    true,
               mimeType:   true,

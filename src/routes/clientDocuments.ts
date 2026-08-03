@@ -119,6 +119,7 @@ router.get(
         orderBy: { createdAt: 'desc' },
         select: {
           id:           true,
+          title:        true,
           fileName:     true,
           fileUrl:      true,
           documentType: true,
@@ -308,10 +309,11 @@ router.post(
       const clientId = (req as ClientRequest).clientId;
       const prisma   = getPrisma();
 
-      const { s3Key, fileName, fileSize, fileType, category, messageId } =
+      const { s3Key, fileName, title, fileSize, fileType, category, messageId } =
         req.body as {
           s3Key?:     string;
           fileName?:  string;
+          title?:     string;
           fileSize?:  number;
           fileType?:  string;
           category?:  string;
@@ -325,6 +327,10 @@ router.post(
       }
       if (!fileName?.trim()) {
         res.status(400).json({ error: 'fileName is required.' });
+        return;
+      }
+      if (!title?.trim()) {
+        res.status(400).json({ error: 'title is required.' });
         return;
       }
       if (typeof fileSize !== 'number' || fileSize < 0) {
@@ -344,6 +350,7 @@ router.post(
       const document = await prisma.document.create({
         data: {
           fileName:     fileName.trim(),
+          title:        title.trim(),
           fileUrl,
           documentType,
           mimeType:     fileType.trim(),
@@ -353,6 +360,7 @@ router.post(
         },
         select: {
           id:           true,
+          title:        true,
           clientId:     true,
           fileName:     true,
           fileUrl:      true,

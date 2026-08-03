@@ -476,6 +476,11 @@ model Document {
   // Original filename as uploaded (e.g. "tax_return_2024.pdf").
   fileName String
 
+  // Human-readable title supplied by the uploader (e.g. "2024 Federal Tax Return").
+  // Optional in the DB to avoid migration crashes on pre-existing rows;
+  // the API layer enforces this as required for all new uploads.
+  title String?
+
   // URL to the stored file. Initially a placeholder; will become an S3
   // pre-signed URL or CloudFront URL in the production storage release.
   fileUrl String
