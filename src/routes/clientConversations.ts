@@ -158,6 +158,108 @@ router.get(
 );
 
 // =============================================================================
+// POST /api/v1/client/conversations
+//
+// Idempotent: creates the conversation thread for the authenticated client,
+// or returns the existing one if it was already created by staff.
+//
+// ── CRITICAL ASSIGNMENT GATE ──────────────────────────────────────────────────
+//
+//   Before creating a thread we verify that client.assignedToId is non-null.
+//   A client cannot initiate messaging until a lawyer has claimed their case
+//   via POST /api/v1/admin/leads/:id/claim.
+//
+//   If assignedToId is null → 403 "Case not yet assigned to an attorney."
+//   If assigned → upsert the Conversation with assignedToId from the Client.
+//
+// ── SECURITY INVARIANTS ───────────────────────────────────────────────────────
+//
+//   clientId is taken exclusively from the verified JWT — never from a URL param.
+//   The Conversation is always linked to this client's borrowerId (clientId).
+//   Conversation.assignedToId mirrors Client.assignedToId for routing.
+//
+// Responses:
+//   200  { conversation }  — Existing conversation returned (idempotent)
+//   201  { conversation }  — New conversation created
+//   403  { error: "Case not yet assigned to an attorney." }
+//        — Client has no assigned lawyer; messaging not yet permitted
+//   401  { error: string }  — Missing or invalid JWT
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.post(
+  '/',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const clientId = (req as ClientRequest).clientId;
+      const prisma   = getPrisma();
+
+      // ── Check assignment gate ─────────────────────────────────────────────
+      //
+      // A client may only open a conversation if a lawyer has claimed their case.
+      // assignedToId on Client is a plain string field set by
+      // POST /api/v1/admin/leads/:id/claim.
+      const client = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true, assignedToId: true },
+      });
+
+      if (!client) {
+        // JWT is valid but the client record is gone — belt-and-suspenders guard.
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      // ── CRITICAL: Block unassigned clients from opening threads ───────────
+      if (!client.assignedToId) {
+        res.status(403).json({
+          error: 'Case not yet assigned to an attorney.',
+        });
+        return;
+      }
+
+      // ── Idempotent find-or-create ─────────────────────────────────────────
+      //
+      // Schema enforces @unique on borrowerId — at most one Conversation per
+      // client. Upsert handles the race where staff already created the thread.
+      //
+      // On create: assignedToId is carried over from Client.assignedToId.
+      // On update: only touch updatedAt — don't overwrite staff-set fields.
+      const existingCheck = await prisma.conversation.findUnique({
+        where:  { borrowerId: clientId },
+        select: { id: true },
+      });
+      const isNew = !existingCheck;
+
+      const conversation = await prisma.conversation.upsert({
+        where:  { borrowerId: clientId },
+        create: {
+          borrowerId:   clientId,
+          assignedToId: client.assignedToId,
+          // status defaults to OPEN via Prisma @default
+        },
+        update: {
+          // Preserve staff-set status/assignedToId — only touch updatedAt
+          updatedAt: new Date(),
+        },
+        select: {
+          id:           true,
+          status:       true,
+          assignedToId: true,
+          createdAt:    true,
+          updatedAt:    true,
+        },
+      });
+
+      const httpStatus = isNew ? 201 : 200;
+      res.status(httpStatus).json({ conversation });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
 // GET /api/v1/client/conversations/:id/messages
 //
 // Returns all CLIENT_VISIBLE messages in the specified conversation,

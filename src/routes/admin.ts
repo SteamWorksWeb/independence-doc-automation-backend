@@ -2550,4 +2550,89 @@ router.delete(
   }
 );
 
+// =============================================================================
+// POST /api/v1/admin/leads/:id/claim
+//
+// Assigns the authenticated lawyer to a client (lead) record.
+//
+// Sets Client.assignedToId  = lawyerId (from JWT)
+//      Client.assigneeName = lawyer.name
+//
+// This is the primary "claim" action — once a lawyer claims a lead,
+// the client can initiate a conversation thread through the client portal.
+// Without a claim, POST /api/v1/client/conversations returns 403.
+//
+// Path params:
+//   :id  — Client id to claim (the Lead's client record)
+//
+// Responses:
+//   200  { client: { id, name, email, assignedToId, assigneeName, updatedAt } }
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   404  { error: string }  — Client not found
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.post(
+  '/leads/:id/claim',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const clientId = String(req.params['id']);
+      const prisma   = getPrisma();
+
+      // ── Verify the client exists ──────────────────────────────────────────
+      const lawyer = await prisma.lawyer.findUnique({
+        where:  { id: lawyerId },
+        select: { id: true, name: true },
+      });
+
+      if (!lawyer) {
+        // Authenticated lawyer JWT but no matching Lawyer row — data integrity issue
+        res.status(403).json({ error: 'Forbidden: authenticated lawyer not found' });
+        return;
+      }
+
+      // ── Verify the target client (lead) exists ────────────────────────────
+      const existing = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Client not found' });
+        return;
+      }
+
+      // ── Assign this lawyer to the client ──────────────────────────────────
+      //
+      // assignedToId  — The lawyer's UUID, stored as a plain string (no FK).
+      // assigneeName  — The lawyer's display name for fast UI rendering.
+      // updatedAt     — Server-side timestamp (Prisma @updatedAt handles this).
+      const updated = await prisma.client.update({
+        where: { id: clientId },
+        data: {
+          assignedToId: lawyerId,
+          assigneeName: lawyer.name,
+        },
+        select: {
+          id:           true,
+          name:         true,
+          email:        true,
+          assignedToId: true,
+          assigneeName: true,
+          updatedAt:    true,
+        },
+      });
+
+      console.log(`[admin] ✅ Lawyer ${lawyerId} (${lawyer.name}) claimed client ${clientId}`);
+
+      res.status(200).json({ client: updated });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
+
