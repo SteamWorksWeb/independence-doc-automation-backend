@@ -3,14 +3,15 @@
 // src/middleware/adminAuth.ts
 //
 // Exports:
-//   requireLawyerJwt   — verifies any valid lawyer JWT (role: 'lawyer').
+//   requireLawyerJwt   — verifies any valid lawyer JWT.
 //   requireSuperAdmin  — extends requireLawyerJwt; additionally asserts that
-//                        the authenticated lawyer carries adminRole: 'SUPER_ADMIN'.
+//                        the authenticated lawyer carries role/adminRole:
+//                        'SUPER_ADMIN'.
 //
 // Flow for requireSuperAdmin:
 //   1. Extract & verify Bearer JWT (same as requireLawyerJwt).
-//   2. Assert payload.role === 'lawyer'   → 403 if not.
-//   3. Assert payload.adminRole === 'SUPER_ADMIN' → 403 Insufficient Permissions.
+//   2. Assert payload carries a staff RBAC role → 403 if not.
+//   3. Assert RBAC role === 'SUPER_ADMIN' → 403 Insufficient Permissions.
 //   4. Attach lawyerId + adminRole to request and call next().
 //
 // Usage:
@@ -30,11 +31,23 @@ export interface LawyerRequest extends Request {
 
 interface LawyerJwtPayload {
   sub:        string; // lawyerId
-  role:       string; // must be 'lawyer'
+  role:       string; // 'SUPER_ADMIN' | 'LAWYER' on current tokens; 'lawyer' on legacy tokens
   adminRole?: string; // 'SUPER_ADMIN' | 'LAWYER' — present on tokens issued after RBAC migration
   email?:     string;
   iat?:       number;
   exp?:       number;
+}
+
+function getAdminRole(payload: LawyerJwtPayload): string | null {
+  if (payload.role === 'SUPER_ADMIN' || payload.role === 'LAWYER') {
+    return payload.role;
+  }
+
+  if (payload.adminRole === 'SUPER_ADMIN' || payload.adminRole === 'LAWYER') {
+    return payload.adminRole;
+  }
+
+  return null;
 }
 
 // ── Shared JWT verification helper ────────────────────────────────────────────
@@ -71,7 +84,7 @@ function verifyLawyerToken(
     return null;
   }
 
-  if (payload.role !== 'lawyer') {
+  if (!getAdminRole(payload)) {
     res.status(403).json({ error: 'Forbidden' });
     return null;
   }
@@ -96,7 +109,7 @@ export function requireLawyerJwt(
   if (!payload) return;
 
   (req as LawyerRequest).lawyerId  = payload.sub;
-  (req as LawyerRequest).adminRole = payload.adminRole ?? 'LAWYER';
+  (req as LawyerRequest).adminRole = getAdminRole(payload) ?? 'LAWYER';
 
   next();
 }
@@ -105,7 +118,7 @@ export function requireLawyerJwt(
 // MIDDLEWARE: requireSuperAdmin
 //
 // Extends the standard lawyer JWT check with an RBAC assertion.
-// Only lawyers whose JWT carries adminRole === 'SUPER_ADMIN' may proceed.
+// Only lawyers whose JWT carries role/adminRole === 'SUPER_ADMIN' may proceed.
 //
 // On failure:
 //   401 — Missing, malformed, or expired token
@@ -121,13 +134,14 @@ export function requireSuperAdmin(
   if (!payload) return;
 
   // ── RBAC check — must be SUPER_ADMIN ──────────────────────────────────────
-  if (payload.adminRole !== 'SUPER_ADMIN') {
+  const adminRole = getAdminRole(payload);
+  if (adminRole !== 'SUPER_ADMIN') {
     res.status(403).json({ error: 'Forbidden: Insufficient Permissions' });
     return;
   }
 
   (req as LawyerRequest).lawyerId  = payload.sub;
-  (req as LawyerRequest).adminRole = payload.adminRole;
+  (req as LawyerRequest).adminRole = adminRole;
 
   next();
 }

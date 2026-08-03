@@ -30,7 +30,7 @@
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
-//   - Only JWTs with role: 'lawyer' are accepted; all others receive 403.
+//   - Only JWTs with staff RBAC roles are accepted; all others receive 403.
 //   - Password hashes are NEVER returned — fields are explicitly selected.
 //   - The intakeProfile is included so the dashboard can flag whether a
 //     client has started or completed the DOJ questionnaire.
@@ -82,22 +82,32 @@ export interface LawyerRequest extends Request {
 }
 
 interface LawyerJwtPayload {
-  sub:  string;   // lawyerId
-  role: string;   // must be 'lawyer'
-  iat?: number;
-  exp?: number;
+  sub:        string;   // lawyerId
+  role:       string;   // 'SUPER_ADMIN' | 'LAWYER' on current tokens; 'lawyer' on legacy tokens
+  adminRole?: string;   // 'SUPER_ADMIN' | 'LAWYER' on legacy RBAC tokens
+  iat?:       number;
+  exp?:       number;
 }
 
 // =============================================================================
 // MIDDLEWARE: requireLawyerJwt
 //
-// Verifies the incoming Bearer JWT and asserts role === 'lawyer'.
+// Verifies the incoming Bearer JWT and asserts it carries a staff RBAC role.
 // Attaches lawyerId (payload.sub) to the request for downstream use.
 //
 // On failure:
 //   401 — Missing, malformed, or expired token
-//   403 — Valid token but role is not 'lawyer'
+//   403 — Valid token but role is not a staff RBAC role
 // =============================================================================
+
+function isStaffJwt(payload: LawyerJwtPayload): boolean {
+  return (
+    payload.role === 'SUPER_ADMIN' ||
+    payload.role === 'LAWYER' ||
+    payload.adminRole === 'SUPER_ADMIN' ||
+    payload.adminRole === 'LAWYER'
+  );
+}
 
 function requireLawyerJwt(
   req:  Request,
@@ -136,7 +146,7 @@ function requireLawyerJwt(
   }
 
   // ── Role assertion — only lawyer tokens may access admin routes ──────────
-  if (payload.role !== 'lawyer') {
+  if (!isStaffJwt(payload)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
@@ -2975,5 +2985,4 @@ router.put(
 );
 
 export default router;
-
 

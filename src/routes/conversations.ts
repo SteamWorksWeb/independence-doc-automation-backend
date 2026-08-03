@@ -20,7 +20,7 @@
 //       createdAt is always server-side — never accepted from the request body.
 //
 // Security model:
-//   - All routes require a valid Lawyer JWT (role === 'lawyer').
+//   - All routes require a valid staff JWT.
 //   - All routes pass through canAccessConversation after JWT verification.
 //   - canAccessConversation is the single, centralized authorization gate
 //     for this router. Future per-conversation ACL logic lives here.
@@ -61,22 +61,32 @@ export interface LawyerRequest extends Request {
 }
 
 interface LawyerJwtPayload {
-  sub: string;   // lawyerId
-  role: string;  // must be 'lawyer'
-  iat?: number;
-  exp?: number;
+  sub:        string;   // lawyerId
+  role:       string;   // 'SUPER_ADMIN' | 'LAWYER' on current tokens; 'lawyer' on legacy tokens
+  adminRole?: string;   // 'SUPER_ADMIN' | 'LAWYER' on legacy RBAC tokens
+  iat?:       number;
+  exp?:       number;
 }
 
 // =============================================================================
 // MIDDLEWARE: requireLawyerJwt
 //
-// Verifies the incoming Bearer JWT and asserts role === 'lawyer'.
+// Verifies the incoming Bearer JWT and asserts it carries a staff RBAC role.
 // Attaches lawyerId (payload.sub) to the request for downstream use.
 //
 // On failure:
 //   401 — Missing, malformed, or expired token
-//   403 — Valid token but role is not 'lawyer'
+//   403 — Valid token but role is not a staff RBAC role
 // =============================================================================
+
+function isStaffJwt(payload: LawyerJwtPayload): boolean {
+  return (
+    payload.role === 'SUPER_ADMIN' ||
+    payload.role === 'LAWYER' ||
+    payload.adminRole === 'SUPER_ADMIN' ||
+    payload.adminRole === 'LAWYER'
+  );
+}
 
 function requireLawyerJwt(
   req: Request,
@@ -115,7 +125,7 @@ function requireLawyerJwt(
   }
 
   // ── Role assertion — only staff tokens may access conversation routes ──────
-  if (payload.role !== 'lawyer') {
+  if (!isStaffJwt(payload)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
@@ -617,4 +627,3 @@ router.post(
 );
 
 export default router;
-
