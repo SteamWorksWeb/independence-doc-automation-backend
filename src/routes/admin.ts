@@ -2634,5 +2634,346 @@ router.post(
   }
 );
 
+// =============================================================================
+// GET /api/v1/admin/users
+//
+// Returns all Lawyer (staff / admin) records — the admin roster used to
+// populate assignment dropdowns and team management UIs.
+//
+// passwordHash is NEVER returned — fields are explicitly selected.
+//
+// Response shape per record:
+//   { id, firstName, lastName, name, email, role, createdAt }
+//   firstName / lastName are derived from the single `name` field via
+//   getNameParts() for frontend compatibility.
+//   role is hardcoded to 'lawyer' — this is the only staff model.
+//
+// Responses:
+//   200  { users: AdminUser[] }
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.get(
+  '/users',
+  async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma = getPrisma();
+
+      const lawyers = await prisma.lawyer.findMany({
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id:        true,
+          name:      true,
+          email:     true,
+          createdAt: true,
+        },
+      });
+
+      const users = lawyers.map((l) => ({
+        id:        l.id,
+        ...getNameParts(l.name),   // firstName, lastName
+        name:      l.name,
+        email:     l.email,
+        role:      'lawyer' as const,
+        createdAt: l.createdAt,
+      }));
+
+      res.status(200).json({ users });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PUT /api/v1/admin/clients/:id/assign
+//
+// RESTful alias for PATCH /clients/:id/assign.
+// Accepts { assignedToId: string | null } and automatically resolves
+// the assigneeName from the Lawyer table when assignedToId is provided.
+//
+// This is distinct from the PATCH variant which requires the caller to pass
+// assigneeName. Here the name is always fetched server-side to avoid drift.
+//
+// Request body (JSON):
+//   { assignedToId: string | null }
+//     string → assign the client to that lawyer; assigneeName is resolved
+//     null   → clear the assignment (sets both assignedToId and assigneeName to null)
+//
+// Responses:
+//   200  { client: ClientRecord }
+//   400  { error: string }  — Missing or invalid assignedToId
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   404  { error: string }  — Client or lawyer not found
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.put(
+  '/clients/:id/assign',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params['id']);
+      const { assignedToId } = req.body as { assignedToId?: string | null };
+
+      // ── Validate input — must be string, null, or explicitly provided ──────
+      if (assignedToId === undefined) {
+        res.status(400).json({ error: 'assignedToId is required.' });
+        return;
+      }
+
+      if (assignedToId !== null && typeof assignedToId !== 'string') {
+        res.status(400).json({ error: 'assignedToId must be a string or null.' });
+        return;
+      }
+
+      // ── Verify client exists ──────────────────────────────────────────────
+      const existingClient = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!existingClient) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      // ── Resolve assigneeName from the Lawyer table ────────────────────────
+      //
+      // When assignedToId is a string we look up the lawyer to get their name.
+      // This prevents the frontend from sending a stale or spoofed name.
+      // When assignedToId is null both fields are cleared.
+      let resolvedName: string | null = null;
+      if (assignedToId) {
+        const lawyer = await prisma.lawyer.findUnique({
+          where:  { id: assignedToId },
+          select: { id: true, name: true },
+        });
+
+        if (!lawyer) {
+          res.status(404).json({ error: 'Assigned lawyer not found.' });
+          return;
+        }
+
+        resolvedName = lawyer.name;
+      }
+
+      // ── Update client ──────────────────────────────────────────────────────
+      const updatedClient = await prisma.client.update({
+        where: { id: clientId },
+        data: {
+          assignedToId: assignedToId,
+          assigneeName: resolvedName,
+        },
+        select: {
+          id:           true,
+          name:         true,
+          email:        true,
+          status:       true,
+          intakeStatus: true,
+          isVerified:   true,
+          isArchived:   true,
+          assignedToId: true,
+          assigneeName: true,
+          createdAt:    true,
+          updatedAt:    true,
+        },
+      });
+
+      console.log(`[admin] ✅ Client ${clientId} assigned to lawyer ${assignedToId ?? 'none'}`);
+
+      res.status(200).json({ client: withNameParts(updatedClient) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// GET /api/v1/admin/profile
+//
+// Returns the currently authenticated lawyer's own profile record.
+// Uses lawyerId from the verified JWT — no URL parameter is accepted.
+// passwordHash is NEVER returned.
+//
+// Responses:
+//   200  { profile: { id, firstName, lastName, name, email, role, createdAt, updatedAt } }
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   404  { error: string }  — Lawyer record not found (stale JWT)
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.get(
+  '/profile',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const prisma   = getPrisma();
+
+      const lawyer = await prisma.lawyer.findUnique({
+        where:  { id: lawyerId },
+        select: {
+          id:        true,
+          name:      true,
+          email:     true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      if (!lawyer) {
+        res.status(404).json({ error: 'Profile not found.' });
+        return;
+      }
+
+      res.status(200).json({
+        profile: {
+          id:        lawyer.id,
+          ...getNameParts(lawyer.name),  // firstName, lastName
+          name:      lawyer.name,
+          email:     lawyer.email,
+          role:      'lawyer' as const,
+          // Note: phone is not stored on the Lawyer model; field omitted.
+          createdAt: lawyer.createdAt,
+          updatedAt: lawyer.updatedAt,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PUT /api/v1/admin/profile
+//
+// Updates the authenticated lawyer's own profile.
+// lawyerId comes exclusively from the verified JWT — the lawyer can only
+// update their own record, never another lawyer's.
+//
+// Request body (JSON — all fields optional, at least one required):
+//   {
+//     firstName?: string   — Joined with lastName to form Lawyer.name
+//     lastName?:  string   — Joined with firstName to form Lawyer.name
+//     name?:      string   — Alternative: pass the full name directly
+//     email?:     string   — Must be unique; 409 if taken by another lawyer
+//     phone?:     string   — Accepted but not persisted (no phone field in schema)
+//   }
+//
+// Name resolution precedence:
+//   1. If firstName or lastName is supplied, they are joined: "firstName lastName"
+//   2. If only `name` is supplied, it is used as-is.
+//   3. If none are supplied, the name is not changed.
+//
+// Responses:
+//   200  { profile: { id, firstName, lastName, name, email, role, updatedAt } }
+//   400  { error: string }  — No updatable fields provided
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   409  { error: string }  — Email already in use by another lawyer
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.put(
+  '/profile',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const lawyerId = (req as LawyerRequest).lawyerId;
+      const prisma   = getPrisma();
+
+      const {
+        firstName,
+        lastName,
+        name: rawName,
+        email,
+        // phone is accepted for forward-compatibility but not stored —
+        // the Lawyer model has no phone column.
+      } = req.body as {
+        firstName?: string;
+        lastName?:  string;
+        name?:      string;
+        email?:     string;
+        phone?:     string;
+      };
+
+      // ── Build the update payload ───────────────────────────────────────────
+      const data: { name?: string; email?: string } = {};
+
+      // Name resolution: prefer firstName/lastName pair, then full name field
+      if (firstName !== undefined || lastName !== undefined) {
+        // Fetch current name to use as fallback for the part not supplied
+        const current = await prisma.lawyer.findUnique({
+          where:  { id: lawyerId },
+          select: { name: true },
+        });
+        const existing = getNameParts(current?.name);
+        const newFirst = (firstName?.trim() ?? existing.firstName);
+        const newLast  = (lastName?.trim()  ?? existing.lastName);
+        data.name = [newFirst, newLast].filter(Boolean).join(' ') || existing.firstName;
+      } else if (rawName?.trim()) {
+        data.name = rawName.trim();
+      }
+
+      if (email?.trim()) {
+        const normalizedEmail = email.trim().toLowerCase();
+
+        // ── Duplicate email check ─────────────────────────────────────────────
+        // Ensure the new email isn't already taken by a different lawyer.
+        const conflict = await prisma.lawyer.findUnique({
+          where:  { email: normalizedEmail },
+          select: { id: true },
+        });
+
+        if (conflict && conflict.id !== lawyerId) {
+          res.status(409).json({ error: 'Email address is already in use.' });
+          return;
+        }
+
+        data.email = normalizedEmail;
+      }
+
+      // ── Require at least one changeable field ─────────────────────────────
+      if (Object.keys(data).length === 0) {
+        res.status(400).json({
+          error: 'Provide at least one of: firstName, lastName, name, or email.',
+        });
+        return;
+      }
+
+      // ── Apply update ──────────────────────────────────────────────────────
+      const updated = await prisma.lawyer.update({
+        where: { id: lawyerId },
+        data,
+        select: {
+          id:        true,
+          name:      true,
+          email:     true,
+          updatedAt: true,
+        },
+      });
+
+      console.log(`[admin] ✅ Lawyer ${lawyerId} updated their profile`);
+
+      res.status(200).json({
+        profile: {
+          id:    updated.id,
+          ...getNameParts(updated.name),  // firstName, lastName
+          name:  updated.name,
+          email: updated.email,
+          role:  'lawyer' as const,
+          updatedAt: updated.updatedAt,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
+
 
