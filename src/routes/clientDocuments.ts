@@ -89,6 +89,55 @@ const router = Router();
 router.use(requireClientJwt);
 
 // =============================================================================
+// GET /
+//
+// Returns all documents belonging to the authenticated client, ordered newest
+// first. This is the primary listing endpoint used by the client document hub.
+//
+// ── SECURITY INVARIANTS ──────────────────────────────────────────────────────
+//
+//   Ownership — `clientId` comes exclusively from the verified JWT payload.
+//     There is no URL parameter the client can manipulate to list another
+//     client's documents. The Prisma `where` clause IS the ownership gate.
+//
+// Responses:
+//   200  { documents: Document[] }
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'client'
+//   500  { error: string }  — Global error handler
+// =============================================================================
+router.get(
+  '/',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // clientId comes exclusively from the verified JWT — never from a URL param.
+      const clientId = (req as ClientRequest).clientId;
+      const prisma   = getPrisma();
+
+      const documents = await prisma.document.findMany({
+        where:   { clientId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id:           true,
+          fileName:     true,
+          fileUrl:      true,
+          documentType: true,
+          mimeType:     true,
+          sizeBytes:    true,
+          uploadedBy:   true,
+          uploadedAt:   true,
+          createdAt:    true,
+        },
+      });
+
+      res.status(200).json({ documents });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
 // GET /required
 //
 // Returns the list of document categories this client is required to upload,
