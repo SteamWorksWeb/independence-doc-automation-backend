@@ -42,7 +42,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, DischargeSnapshot } from '@prisma/client';
 import {
   evaluateClient,
   ClientNotFoundError,
@@ -54,6 +54,7 @@ import {
   deleteS3Object,
   S3_BUCKET,
 } from '../utils/s3';
+import { calculateDischargeProbability } from '../utils/dischargeAnalyzer';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -1844,6 +1845,9 @@ router.post(
         schoolClosed,
         is65OrOlder,
         lastAttendedSchool,
+        appliedForIDR,
+        madePriorPayments,
+        contactedServicer,
       } = req.body as {
         firstName?:              string;
         lastName?:               string;
@@ -1866,6 +1870,9 @@ router.post(
         schoolClosed?:           boolean;
         is65OrOlder?:            boolean;
         lastAttendedSchool?:     string;
+        appliedForIDR?:          boolean;
+        madePriorPayments?:      boolean;
+        contactedServicer?:      boolean;
       };
 
       // ————————————————————————————————————————————————————————————————————————————
@@ -1981,27 +1988,36 @@ router.post(
       // that empty strings and undefined values become null rather than NaN.
       // All boolean fields are coerced through toBool() so that "Yes"/"No"
       // dropdown strings are converted to proper Prisma Boolean values.
+      const snapshotData = {
+        hasFederalLoans:        hasFederalLoans.trim(),
+        principalBalance:       toFloat(principalBalance)       ?? undefined,
+        householdSize:          toInt(householdSize)            ?? undefined,
+        monthlyGrossIncome:     toFloat(monthlyGrossIncome)     ?? undefined,
+        monthlyTakeHomePay:     toFloat(monthlyTakeHomePay)     ?? undefined,
+        additionalIncome:       toFloat(additionalIncome)       ?? undefined,
+        housingExpenses:        toFloat(housingExpenses)        ?? undefined,
+        transportationExpenses: toFloat(transportationExpenses) ?? undefined,
+        dependentCareExpenses:  toFloat(dependentCareExpenses)  ?? undefined,
+        isEmployed:             toBool(isEmployed)              ?? undefined,
+        workInFieldOfStudy:     toBool(workInFieldOfStudy)      ?? undefined,
+        unemployed5PlusYears:   toBool(unemployed5PlusYears)    ?? undefined,
+        hasDisability:          toBool(hasDisability)           ?? undefined,
+        didGraduate:            toBool(didGraduate)             ?? undefined,
+        schoolClosed:           toBool(schoolClosed)            ?? undefined,
+        is65OrOlder:            toBool(is65OrOlder)             ?? undefined,
+        lastAttendedSchool:     toDate(lastAttendedSchool)      ?? undefined,
+        appliedForIDR:          toBool(appliedForIDR)           ?? false,
+        madePriorPayments:      toBool(madePriorPayments)       ?? false,
+        contactedServicer:      toBool(contactedServicer)       ?? false,
+      };
+      const analysis = calculateDischargeProbability(snapshotData as DischargeSnapshot);
+
       const snapshot = await prisma.dischargeSnapshot.create({
         data: {
           clientId:               client.id,
-          hasFederalLoans:        hasFederalLoans.trim(),
-          principalBalance:       toFloat(principalBalance)       ?? undefined,
-          householdSize:          toInt(householdSize)            ?? undefined,
-          monthlyGrossIncome:     toFloat(monthlyGrossIncome)     ?? undefined,
-          monthlyTakeHomePay:     toFloat(monthlyTakeHomePay)     ?? undefined,
-          additionalIncome:       toFloat(additionalIncome)       ?? undefined,
-          housingExpenses:        toFloat(housingExpenses)        ?? undefined,
-          transportationExpenses: toFloat(transportationExpenses) ?? undefined,
-          dependentCareExpenses:  toFloat(dependentCareExpenses)  ?? undefined,
-          isEmployed:             toBool(isEmployed)              ?? undefined,
-          workInFieldOfStudy:     toBool(workInFieldOfStudy)      ?? undefined,
-          unemployed5PlusYears:   toBool(unemployed5PlusYears)    ?? undefined,
-          hasDisability:          toBool(hasDisability)           ?? undefined,
-          didGraduate:            toBool(didGraduate)             ?? undefined,
-          schoolClosed:           toBool(schoolClosed)            ?? undefined,
-          is65OrOlder:            toBool(is65OrOlder)             ?? undefined,
-          lastAttendedSchool:     toDate(lastAttendedSchool)      ?? undefined,
-          // isDischargeable stays null; status stays "Incomplete" (schema defaults)
+          ...snapshotData,
+          isDischargeable:        analysis.isDischargeable,
+          status:                 analysis.status,
         },
       });
 
@@ -2208,9 +2224,8 @@ router.delete(
 // =============================================================================
 // PATCH /api/v1/admin/discharge-snapshots/:id/status
 //
-// Allows a lawyer to manually override the pipeline status of a Discharge
-// Snapshot (e.g., marking it as 'Incomplete' or 'Archived') without modifying
-// any other snapshot fields.
+// Allows a lawyer to manually override the analyzer status of a Discharge
+// Snapshot without modifying any other snapshot fields.
 //
 // Path param:
 //   :id — the DischargeSnapshot UUID
@@ -2241,6 +2256,21 @@ router.patch(
         return;
       }
 
+      const normalizedStatus = String(status).trim();
+      const allowedStatuses = [
+        'HIGH_PROBABILITY',
+        'BORDERLINE',
+        'LOW_PROBABILITY',
+        'PENDING',
+      ] as const;
+
+      if (!(allowedStatuses as readonly string[]).includes(normalizedStatus)) {
+        res.status(400).json({
+          error: 'status must be one of HIGH_PROBABILITY, BORDERLINE, LOW_PROBABILITY, PENDING.',
+        });
+        return;
+      }
+
       // ── Verify the snapshot exists ────────────────────────────────────────
       const existing = await prisma.dischargeSnapshot.findUnique({
         where:  { id: snapshotId },
@@ -2255,7 +2285,7 @@ router.patch(
       // ── Persist the status update ─────────────────────────────────────────
       const updatedSnapshot = await prisma.dischargeSnapshot.update({
         where: { id: snapshotId },
-        data:  { status: String(status).trim() },
+        data:  { status: normalizedStatus },
       });
 
       console.log(
@@ -2311,6 +2341,9 @@ router.put(
         schoolClosed,
         is65OrOlder,
         lastAttendedSchool,
+        appliedForIDR,
+        madePriorPayments,
+        contactedServicer,
       } = req.body as {
         hasFederalLoans?:        string;
         principalBalance?:       number;
@@ -2329,6 +2362,9 @@ router.put(
         schoolClosed?:           boolean;
         is65OrOlder?:            boolean;
         lastAttendedSchool?:     string;
+        appliedForIDR?:          boolean;
+        madePriorPayments?:      boolean;
+        contactedServicer?:      boolean;
       };
 
       // ── Strict type coercion helpers ─────────────────────────────────────────
@@ -2361,8 +2397,7 @@ router.put(
 
       // ── Verify the snapshot exists ──────────────────────────────────────────
       const existing = await prisma.dischargeSnapshot.findUnique({
-        where:  { id: snapshotId },
-        select: { id: true },
+        where: { id: snapshotId },
       });
 
       if (!existing) {
@@ -2371,26 +2406,39 @@ router.put(
       }
 
       // ── Persist the update ──────────────────────────────────────────────────
+      const snapshotData = {
+        hasFederalLoans:        hasFederalLoans?.trim()         ?? undefined,
+        principalBalance:       toFloat(principalBalance)       ?? undefined,
+        householdSize:          toInt(householdSize)            ?? undefined,
+        monthlyGrossIncome:     toFloat(monthlyGrossIncome)     ?? undefined,
+        monthlyTakeHomePay:     toFloat(monthlyTakeHomePay)     ?? undefined,
+        additionalIncome:       toFloat(additionalIncome)       ?? undefined,
+        housingExpenses:        toFloat(housingExpenses)        ?? undefined,
+        transportationExpenses: toFloat(transportationExpenses) ?? undefined,
+        dependentCareExpenses:  toFloat(dependentCareExpenses)  ?? undefined,
+        isEmployed:             toBool(isEmployed)              ?? undefined,
+        workInFieldOfStudy:     toBool(workInFieldOfStudy)      ?? undefined,
+        unemployed5PlusYears:   toBool(unemployed5PlusYears)    ?? undefined,
+        hasDisability:          toBool(hasDisability)           ?? undefined,
+        didGraduate:            toBool(didGraduate)             ?? undefined,
+        schoolClosed:           toBool(schoolClosed)            ?? undefined,
+        is65OrOlder:            toBool(is65OrOlder)             ?? undefined,
+        lastAttendedSchool:     toDate(lastAttendedSchool)      ?? undefined,
+        appliedForIDR:          toBool(appliedForIDR)           ?? undefined,
+        madePriorPayments:      toBool(madePriorPayments)       ?? undefined,
+        contactedServicer:      toBool(contactedServicer)       ?? undefined,
+      };
+      const analysis = calculateDischargeProbability({
+        ...existing,
+        ...snapshotData,
+      } as DischargeSnapshot);
+
       const updatedSnapshot = await prisma.dischargeSnapshot.update({
         where: { id: snapshotId },
         data: {
-          hasFederalLoans:        hasFederalLoans?.trim()         ?? undefined,
-          principalBalance:       toFloat(principalBalance)       ?? undefined,
-          householdSize:          toInt(householdSize)            ?? undefined,
-          monthlyGrossIncome:     toFloat(monthlyGrossIncome)     ?? undefined,
-          monthlyTakeHomePay:     toFloat(monthlyTakeHomePay)     ?? undefined,
-          additionalIncome:       toFloat(additionalIncome)       ?? undefined,
-          housingExpenses:        toFloat(housingExpenses)        ?? undefined,
-          transportationExpenses: toFloat(transportationExpenses) ?? undefined,
-          dependentCareExpenses:  toFloat(dependentCareExpenses)  ?? undefined,
-          isEmployed:             toBool(isEmployed)              ?? undefined,
-          workInFieldOfStudy:     toBool(workInFieldOfStudy)      ?? undefined,
-          unemployed5PlusYears:   toBool(unemployed5PlusYears)    ?? undefined,
-          hasDisability:          toBool(hasDisability)           ?? undefined,
-          didGraduate:            toBool(didGraduate)             ?? undefined,
-          schoolClosed:           toBool(schoolClosed)            ?? undefined,
-          is65OrOlder:            toBool(is65OrOlder)             ?? undefined,
-          lastAttendedSchool:     toDate(lastAttendedSchool)      ?? undefined,
+          ...snapshotData,
+          isDischargeable:        analysis.isDischargeable,
+          status:                 analysis.status,
         },
       });
 
@@ -2985,4 +3033,3 @@ router.put(
 );
 
 export default router;
-

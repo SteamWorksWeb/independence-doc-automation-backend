@@ -22,9 +22,10 @@
 import { Router, Request as ExpressRequest, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, DischargeSnapshot } from '@prisma/client';
 import { requireClientJwt, ClientRequest } from '../middleware/clientJwt';
 import { evaluateExpenses, IrsExpenseKey } from '../services/irsStandards';
+import { calculateDischargeProbability } from '../utils/dischargeAnalyzer';
 
 // ── Prisma client singleton ───────────────────────────────────────────────────
 let _prisma: PrismaClient | null = null;
@@ -102,6 +103,9 @@ interface CompleteIntakePayload {
   isEmployed?: unknown;
   unemployedLongTerm?: unknown;
   ownsVehicle?: unknown;
+  appliedForIDR?: unknown;
+  madePriorPayments?: unknown;
+  contactedServicer?: unknown;
   rentExpense?: unknown;
   medicalExpense?: unknown;
   utilitiesExpense?: unknown;
@@ -352,6 +356,9 @@ router.post(
       const isEmployed = parseOptionalBoolean(body.isEmployed);
       const unemployedLongTerm = parseOptionalBoolean(body.unemployedLongTerm);
       const ownsVehicle = parseOptionalBoolean(body.ownsVehicle);
+      const appliedForIDR = parseOptionalBoolean(body.appliedForIDR);
+      const madePriorPayments = parseOptionalBoolean(body.madePriorPayments);
+      const contactedServicer = parseOptionalBoolean(body.contactedServicer);
       const militaryStartDate = parseOptionalDate(body.militaryStartDate);
       const militaryEndDate = parseOptionalDate(body.militaryEndDate);
 
@@ -399,7 +406,6 @@ router.post(
         const latestSnapshot = await tx.dischargeSnapshot.findFirst({
           where: { clientId },
           orderBy: { createdAt: 'desc' },
-          select: { id: true },
         });
 
         await tx.client.update({
@@ -442,6 +448,9 @@ router.post(
           isEmployed: isEmployed ?? undefined,
           unemployed5PlusYears: unemployedLongTerm ?? undefined,
           ownsVehicle: ownsVehicle ?? undefined,
+          appliedForIDR: appliedForIDR ?? undefined,
+          madePriorPayments: madePriorPayments ?? undefined,
+          contactedServicer: contactedServicer ?? undefined,
           rentExpense: expenses.rentExpense,
           medicalExpense: expenses.medicalExpense,
           utilitiesExpense: expenses.utilitiesExpense,
@@ -452,17 +461,32 @@ router.post(
           transportationExpenses: expenses.carInsuranceExpense + expenses.gasExpense,
           flaggedDocuments,
         };
+        const analysisSnapshot = latestSnapshot
+          ? { ...latestSnapshot, ...snapshotData }
+          : {
+              ...snapshotData,
+              appliedForIDR: appliedForIDR ?? false,
+              madePriorPayments: madePriorPayments ?? false,
+              contactedServicer: contactedServicer ?? false,
+            };
+        const analysis = calculateDischargeProbability(analysisSnapshot as DischargeSnapshot);
 
         const snapshot = latestSnapshot
           ? await tx.dischargeSnapshot.update({
               where: { id: latestSnapshot.id },
-              data: snapshotData,
+              data: {
+                ...snapshotData,
+                isDischargeable: analysis.isDischargeable,
+                status: analysis.status,
+              },
             })
           : await tx.dischargeSnapshot.create({
               data: {
                 clientId,
                 hasFederalLoans: 'unsure',
                 ...snapshotData,
+                isDischargeable: analysis.isDischargeable,
+                status: analysis.status,
               },
             });
 
@@ -518,7 +542,6 @@ router.post(
       const latestSnapshot = await prisma.dischargeSnapshot.findFirst({
         where: { clientId },
         orderBy: { createdAt: 'desc' },
-        select: { id: true },
       });
 
       const snapshotData = {
@@ -532,17 +555,27 @@ router.post(
         transportationExpenses: expenses.carInsuranceExpense + expenses.gasExpense,
         flaggedDocuments,
       };
+      const analysisSnapshot = latestSnapshot
+        ? { ...latestSnapshot, ...snapshotData }
+        : snapshotData;
+      const analysis = calculateDischargeProbability(analysisSnapshot as DischargeSnapshot);
 
       const snapshot = latestSnapshot
         ? await prisma.dischargeSnapshot.update({
             where: { id: latestSnapshot.id },
-            data: snapshotData,
+            data: {
+              ...snapshotData,
+              isDischargeable: analysis.isDischargeable,
+              status: analysis.status,
+            },
           })
         : await prisma.dischargeSnapshot.create({
             data: {
               clientId,
               hasFederalLoans: 'unsure',
               ...snapshotData,
+              isDischargeable: analysis.isDischargeable,
+              status: analysis.status,
             },
           });
 

@@ -560,8 +560,10 @@ model Document {
 //   true = dischargeable; false = not dischargeable.
 //
 // status:
-//   "Incomplete" — wizard submitted but analysis not yet run.
-//   "Analyzed"   — isDischargeable has been set by the engine.
+//   "PENDING"          — snapshot submitted before enough analysis data exists.
+//   "HIGH_PROBABILITY" — all three DOJ guideline prongs passed.
+//   "BORDERLINE"       — finances + good faith pass, but no presumption applies.
+//   "LOW_PROBABILITY"  — one or more core prongs failed.
 // =============================================================================
 
 model DischargeSnapshot {
@@ -612,12 +614,17 @@ model DischargeSnapshot {
   is65OrOlder        Boolean?
   lastAttendedSchool DateTime?
 
+  // ── Good Faith Flags ─────────────────────────────────────────────────────
+  appliedForIDR      Boolean @default(false)
+  madePriorPayments  Boolean @default(false)
+  contactedServicer  Boolean @default(false)
+
   // ── Analysis result ────────────────────────────────────────────────────────
   // Null until the eligibility engine processes this snapshot.
   isDischargeable Boolean?
 
   // ── Workflow status ────────────────────────────────────────────────────────
-  status String @default("Incomplete")
+  status String @default("PENDING")
 
   // ── Timestamps ─────────────────────────────────────────────────────────────
   createdAt DateTime @default(now())
