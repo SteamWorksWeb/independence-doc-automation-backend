@@ -27,6 +27,7 @@
 //   PATCH  /api/v1/admin/discharge-snapshots/:id/status — Update the pipeline status of a discharge snapshot
 //   POST   /api/v1/admin/borrowers/invite     — Invite a borrower (pre-client) to the Discharge Snapshot pipeline
 //   POST   /api/v1/admin/leads/invite         — Alias for /borrowers/invite (Leads terminology, used by InviteBorrowerModal)
+//   DELETE /api/v1/admin/leads/:id            — Permanently delete a Lead (DischargeSnapshot) and orphaned Client
 
 // Security model:
 //   - Protected by requireLawyerJwt middleware.
@@ -1872,6 +1873,76 @@ router.post(
         intakeLink,
       });
 
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// DELETE /api/v1/admin/leads/:id
+//
+// Canonical alias for DELETE /discharge-snapshots/:id, using the Leads
+// terminology introduced during the admin UI overhaul.
+//
+// Permanently removes a DischargeSnapshot (Lead) by its UUID. After the
+// snapshot is deleted, the route checks whether the parent Client record still
+// has any remaining snapshots. If the count is zero the Client is also deleted,
+// cleaning up the orphaned borrower record.
+//
+// Path param:
+//   :id — the DischargeSnapshot UUID (treated as a "Lead" ID in the frontend)
+//
+// Responses:
+//   200  { success: true, message: 'Lead deleted successfully' }
+//   404  { error: string }  — No snapshot found for the given id
+//   401  { error: string }  — Missing or invalid JWT (handled by router.use)
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.delete(
+  '/leads/:id',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma     = getPrisma();
+      const snapshotId = String(req.params.id);
+
+      // ── Locate the snapshot to retrieve its parent clientId ─────────────────
+      const snapshot = await prisma.dischargeSnapshot.findUnique({
+        where:  { id: snapshotId },
+        select: { id: true, clientId: true },
+      });
+
+      if (!snapshot) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+
+      const { clientId } = snapshot;
+
+      // ── Delete the snapshot ──────────────────────────────────────────────────
+      await prisma.dischargeSnapshot.delete({ where: { id: snapshotId } });
+
+      // ── Delete the parent Client if it has no remaining snapshots ────────────
+      // A client may have been submitted to the wizard multiple times. Only
+      // remove the Client record when this was their last (or only) snapshot.
+      const remainingCount = await prisma.dischargeSnapshot.count({
+        where: { clientId },
+      });
+
+      if (remainingCount === 0) {
+        await prisma.client.delete({ where: { id: clientId } });
+        console.log(
+          `[admin] 🗑️  Lead (snapshot ${snapshotId}) deleted — parent Client ${clientId} also removed (no remaining snapshots).`
+        );
+      } else {
+        console.log(
+          `[admin] 🗑️  Lead (snapshot ${snapshotId}) deleted — Client ${clientId} retained (${remainingCount} snapshot(s) remain).`
+        );
+      }
+
+      res.status(200).json({ success: true, message: 'Lead deleted successfully' });
     } catch (err) {
       next(err);
     }
