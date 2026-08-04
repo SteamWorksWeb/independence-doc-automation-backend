@@ -699,6 +699,19 @@ function toSnapshotDate(val: unknown): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
+// Coerces an unknown value to a finite float, or returns undefined if absent/invalid.
+function toSnapshotNumber(val: unknown): number | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  const n = Number(val);
+  return isFinite(n) ? n : undefined;
+}
+
+// Coerces an unknown value to an integer, or returns undefined if absent/invalid.
+function toSnapshotInt(val: unknown): number | undefined {
+  const n = toSnapshotNumber(val);
+  return n !== undefined ? Math.round(n) : undefined;
+}
+
 function removeUndefinedValues<T extends Record<string, unknown>>(value: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined)
@@ -837,15 +850,54 @@ router.patch(
 // =============================================================================
 // PATCH /api/v1/admin/clients/:id/snapshot
 //
-// Updates the latest DischargeSnapshot DOJ parameters for a client. Used by the
-// Staff Scoreboard when staff adjusts DOJ analyzer inputs inline.
+// Updates the latest DischargeSnapshot for a client. Accepts the full suite of
+// editable fields so the admin edit form can persist all financial, demographic,
+// and eligibility data in one round-trip.
 //
-// Request body:
-//   hasDisability?:      boolean | "yes" | "no" | "true" | "false"
-//   didGraduate?:        boolean | "yes" | "no" | "true" | "false"
-//   schoolClosed?:       boolean | "yes" | "no" | "true" | "false"
-//   is65OrOlder?:        boolean | "yes" | "no" | "true" | "false"
-//   lastAttendedSchool?: string | Date
+// Request body (all optional; at least one must be present):
+//
+//   Loan
+//   ────
+//   hasFederalLoans?:       "yes" | "no" | "unsure"
+//   outstandingBalance?:    number   (stored as principalBalance)
+//
+//   Household & Income
+//   ──────────────────
+//   householdSize?:         number
+//   monthlyGrossIncome?:    number
+//   monthlyTakeHomePay?:    number
+//   additionalIncome?:      number
+//
+//   Expenses
+//   ────────
+//   housingExpenses?:       number
+//   transportationExpenses?: number
+//   dependentCareExpenses?: number
+//
+//   Employment & Circumstance Flags
+//   ────────────────────────────────
+//   currentlyEmployed?:     boolean | "yes" | "no" | "true" | "false"  (stored as isEmployed)
+//   workInFieldOfStudy?:    boolean | "yes" | "no" | "true" | "false"
+//   unemployed5PlusYears?:  boolean | "yes" | "no" | "true" | "false"
+//   hasDisability?:         boolean | "yes" | "no" | "true" | "false"
+//
+//   Education & School Flags
+//   ────────────────────────
+//   didGraduate?:           boolean | "yes" | "no" | "true" | "false"
+//   schoolClosed?:          boolean | "yes" | "no" | "true" | "false"
+//   lastAttendedSchool?:    string | Date
+//   is65OrOlder?:           boolean | "yes" | "no" | "true" | "false"
+//
+//   Good-Faith Flags
+//   ────────────────
+//   appliedForIDR?:         boolean | "yes" | "no" | "true" | "false"
+//   madePriorPayments?:     boolean | "yes" | "no" | "true" | "false"
+//   contactedServicer?:     boolean | "yes" | "no" | "true" | "false"
+//
+//   Override fields (computed values that may be manually set)
+//   ──────────────────────────────────────────────────────────
+//   isDischargeable?:       boolean | "yes" | "no" | "true" | "false"
+//   status?:                string
 // =============================================================================
 
 router.patch(
@@ -855,24 +907,71 @@ router.patch(
       const prisma   = getPrisma();
       const clientId = String(req.params.id);
       const body = req.body as {
-        hasDisability?:      unknown;
-        didGraduate?:        unknown;
-        schoolClosed?:       unknown;
-        is65OrOlder?:        unknown;
-        lastAttendedSchool?: unknown;
+        // Loan
+        hasFederalLoans?:        unknown;
+        outstandingBalance?:     unknown;
+        // Household & Income
+        householdSize?:          unknown;
+        monthlyGrossIncome?:     unknown;
+        monthlyTakeHomePay?:     unknown;
+        additionalIncome?:       unknown;
+        // Expenses
+        housingExpenses?:        unknown;
+        transportationExpenses?: unknown;
+        dependentCareExpenses?:  unknown;
+        // Employment & Circumstance Flags
+        currentlyEmployed?:      unknown;
+        workInFieldOfStudy?:     unknown;
+        unemployed5PlusYears?:   unknown;
+        hasDisability?:          unknown;
+        // Education & School Flags
+        didGraduate?:            unknown;
+        schoolClosed?:           unknown;
+        lastAttendedSchool?:     unknown;
+        is65OrOlder?:            unknown;
+        // Good-Faith Flags
+        appliedForIDR?:          unknown;
+        madePriorPayments?:      unknown;
+        contactedServicer?:      unknown;
+        // Override fields
+        isDischargeable?:        unknown;
+        status?:                 unknown;
       };
 
       const snapshotData = removeUndefinedValues({
-        hasDisability:      toSnapshotBool(body.hasDisability),
-        didGraduate:        toSnapshotBool(body.didGraduate),
-        schoolClosed:       toSnapshotBool(body.schoolClosed),
-        is65OrOlder:        toSnapshotBool(body.is65OrOlder),
-        lastAttendedSchool: toSnapshotDate(body.lastAttendedSchool),
+        // Loan
+        hasFederalLoans:        body.hasFederalLoans !== undefined && body.hasFederalLoans !== null && body.hasFederalLoans !== ''
+                                  ? String(body.hasFederalLoans)
+                                  : undefined,
+        principalBalance:       toSnapshotNumber(body.outstandingBalance),
+        // Household & Income
+        householdSize:          toSnapshotInt(body.householdSize),
+        monthlyGrossIncome:     toSnapshotNumber(body.monthlyGrossIncome),
+        monthlyTakeHomePay:     toSnapshotNumber(body.monthlyTakeHomePay),
+        additionalIncome:       toSnapshotNumber(body.additionalIncome),
+        // Expenses
+        housingExpenses:        toSnapshotNumber(body.housingExpenses),
+        transportationExpenses: toSnapshotNumber(body.transportationExpenses),
+        dependentCareExpenses:  toSnapshotNumber(body.dependentCareExpenses),
+        // Employment & Circumstance Flags
+        isEmployed:             toSnapshotBool(body.currentlyEmployed),
+        workInFieldOfStudy:     toSnapshotBool(body.workInFieldOfStudy),
+        unemployed5PlusYears:   toSnapshotBool(body.unemployed5PlusYears),
+        hasDisability:          toSnapshotBool(body.hasDisability),
+        // Education & School Flags
+        didGraduate:            toSnapshotBool(body.didGraduate),
+        schoolClosed:           toSnapshotBool(body.schoolClosed),
+        lastAttendedSchool:     toSnapshotDate(body.lastAttendedSchool),
+        is65OrOlder:            toSnapshotBool(body.is65OrOlder),
+        // Good-Faith Flags
+        appliedForIDR:          toSnapshotBool(body.appliedForIDR),
+        madePriorPayments:      toSnapshotBool(body.madePriorPayments),
+        contactedServicer:      toSnapshotBool(body.contactedServicer),
       });
 
       if (Object.keys(snapshotData).length === 0) {
         res.status(400).json({
-          error: 'At least one DOJ snapshot field is required.',
+          error: 'At least one snapshot field is required.',
         });
         return;
       }
@@ -897,21 +996,31 @@ router.patch(
         return;
       }
 
+      // Apply the editable fields first, then recompute isDischargeable/status
+      // from the freshly-saved snapshot so the probability engine always has a
+      // consistent view of the record.
       const rawUpdatedSnapshot = await prisma.dischargeSnapshot.update({
         where: { id: latestSnapshot.id },
         data:  snapshotData,
       });
       const analysis = calculateDischargeProbability(rawUpdatedSnapshot);
 
+      // Allow the caller to hard-override isDischargeable/status; fall back to
+      // the computed values when the field is absent from the request body.
+      const overrideIsDischargeable = toSnapshotBool(body.isDischargeable);
+      const overrideStatus          = body.status !== undefined && body.status !== null && body.status !== ''
+        ? String(body.status)
+        : undefined;
+
       const updatedSnapshot = await prisma.dischargeSnapshot.update({
         where: { id: latestSnapshot.id },
         data: {
-          isDischargeable: analysis.isDischargeable,
-          status:          analysis.status,
+          isDischargeable: overrideIsDischargeable !== undefined ? overrideIsDischargeable : analysis.isDischargeable,
+          status:          overrideStatus          !== undefined ? overrideStatus          : analysis.status,
         },
       });
 
-      console.log(`[admin] DischargeSnapshot ${latestSnapshot.id} DOJ fields updated for client ${clientId}`);
+      console.log(`[admin] DischargeSnapshot ${latestSnapshot.id} updated for client ${clientId}`);
 
       res.status(200).json({ snapshot: updatedSnapshot });
     } catch (err) {
