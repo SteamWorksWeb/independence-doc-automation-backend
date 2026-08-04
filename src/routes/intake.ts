@@ -5,8 +5,11 @@
 // Mounted at: /api/v1/intake  (see server.ts)
 //
 // Routes:
-//   POST /api/v1/intake      — Create or update the authenticated client's intake profile
-//   GET  /api/v1/intake      — Retrieve the authenticated client's intake profile
+//   POST /api/v1/intake          — Create or update the authenticated client's intake profile
+//   POST /api/v1/intake/snapshot — Client wizard final submission — creates DischargeSnapshot
+//   POST /api/v1/intake/complete — Legacy final submission (military/expense fields)
+//   POST /api/v1/intake/expenses — Update IRS expense fields on latest snapshot
+//   GET  /api/v1/intake          — Retrieve the authenticated client's intake profile
 //
 // Security model:
 //   - All routes require a valid Client JWT (requireClientJwt middleware).
@@ -623,4 +626,223 @@ router.get(
   }
 );
 
+
+// =============================================================================
+// POST /api/v1/intake/snapshot
+//
+// Client-wizard final submission endpoint.
+//
+// Accepts the full DischargeSnapshot payload (mirroring the admin wizard) and:
+//   1. Parses all fields defensively (booleans, numbers, dates)
+//   2. Runs the discharge probability engine on the assembled data
+//   3. Creates a new DischargeSnapshot row linked to the authenticated client
+//   4. Marks Client.intakeStatus = 'Complete' in the same transaction
+//   5. Returns { success: true, snapshot }
+//
+// Security model:
+//   - requireClientJwt asserts a valid client Bearer token
+//   - clientId is extracted from the verified JWT — never trusted from the body
+//
+// Responses:
+//   200  { success: true, snapshot }  — Created successfully
+//   400  { error: string }            — Validation error
+//   401  { error: 'Unauthorized' }    — Missing or invalid client JWT
+//   404  { error: 'Client not found' } — JWT subject doesn't match any client row
+//   500  { error: string }            — Unexpected server error
+// =============================================================================
+
+interface SnapshotPayload {
+  // Step 1 — identity (used to update Client.name / phone if provided)
+  firstName?:   string;
+  lastName?:    string;
+  phone?:       string;
+  email?:       string;
+
+  // Step 2 — loans
+  hasFederalLoans?: string; // "Yes" | "No" | "I don't know"  → normalised below
+
+  // Step 3 — balance & household
+  outstandingBalance?: unknown; // maps to principalBalance
+  householdSize?:      unknown; // number
+
+  // Step 4 — income
+  monthlyGrossIncome?: unknown;
+  monthlyTakeHomePay?: unknown;
+
+  // Step 5 — expenses
+  additionalMonthlyIncome?: unknown; // maps to additionalIncome
+  housingExpenses?:         unknown;
+  transportationExpenses?:  unknown;
+  dependentCareExpenses?:   unknown;
+
+  // Step 6 — employment & health
+  currentlyEmployed?:  unknown; // maps to isEmployed
+  workInFieldOfStudy?: unknown;
+  unemployed5Years?:   unknown; // maps to unemployed5PlusYears
+  hasDisability?:      unknown;
+
+  // Step 7 — education & age
+  didGraduate?:        unknown;
+  schoolClosed?:       unknown;
+  lastAttendedSchool?: unknown; // date string
+  is65OrOlder?:        unknown;
+}
+
+/** Normalise the hasFederalLoans block-button value to the DB enum string */
+function normaliseFederalLoans(raw: string | undefined): 'yes' | 'no' | 'unsure' {
+  if (!raw) return 'unsure';
+  const lower = raw.trim().toLowerCase();
+  if (lower === 'yes') return 'yes';
+  if (lower === 'no')  return 'no';
+  return 'unsure'; // "I don't know" or anything else
+}
+
+router.post(
+  '/snapshot',
+  requireClientJwt,
+  async (req: ExpressRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const clientId = (req as unknown as ClientRequest).clientId;
+      const body     = req.body as SnapshotPayload;
+
+      // ── 1. Require hasFederalLoans ─────────────────────────────────────────
+      if (!body.hasFederalLoans) {
+        res.status(400).json({ error: 'hasFederalLoans is required' });
+        return;
+      }
+      const hasFederalLoans = normaliseFederalLoans(body.hasFederalLoans);
+
+      // ── 2. Parse numeric fields ────────────────────────────────────────────
+      const principalBalance     = parseExpenseAmount(body.outstandingBalance);
+      const householdSizeRaw     = parseExpenseAmount(body.householdSize);
+      const monthlyGrossIncome   = parseExpenseAmount(body.monthlyGrossIncome);
+      const monthlyTakeHomePay   = parseExpenseAmount(body.monthlyTakeHomePay);
+      const additionalIncome     = parseExpenseAmount(body.additionalMonthlyIncome);
+      const housingExpenses      = parseExpenseAmount(body.housingExpenses);
+      const transportationExpenses = parseExpenseAmount(body.transportationExpenses);
+      const dependentCareExpenses  = parseExpenseAmount(body.dependentCareExpenses);
+
+      // householdSize: coerce to integer (the schema uses Int?)
+      const householdSize =
+        householdSizeRaw !== null ? Math.round(householdSizeRaw) : null;
+
+      // ── 3. Parse boolean fields ────────────────────────────────────────────
+      const isEmployed          = parseOptionalBoolean(body.currentlyEmployed);
+      const workInFieldOfStudy  = parseOptionalBoolean(body.workInFieldOfStudy);
+      const unemployed5PlusYears = parseOptionalBoolean(body.unemployed5Years);
+      const hasDisability       = parseOptionalBoolean(body.hasDisability);
+      const didGraduate         = parseOptionalBoolean(body.didGraduate);
+      const schoolClosed        = parseOptionalBoolean(body.schoolClosed);
+      const is65OrOlder         = parseOptionalBoolean(body.is65OrOlder);
+
+      // ── 4. Parse date field ────────────────────────────────────────────────
+      const lastAttendedSchool = parseOptionalDate(body.lastAttendedSchool);
+
+      // ── 5. Identity fields (optional — update client name/phone if given) ──
+      const firstName = trimmedOrUndefined(body.firstName);
+      const lastName  = trimmedOrUndefined(body.lastName);
+      const phone     = trimmedOrUndefined(body.phone);
+
+      // ── 6. Assemble snapshot data ─────────────────────────────────────────
+      const snapshotData = {
+        hasFederalLoans,
+        ...(principalBalance      !== null ? { principalBalance }      : {}),
+        ...(householdSize         !== null ? { householdSize }         : {}),
+        ...(monthlyGrossIncome    !== null ? { monthlyGrossIncome }    : {}),
+        ...(monthlyTakeHomePay    !== null ? { monthlyTakeHomePay }    : {}),
+        ...(additionalIncome      !== null ? { additionalIncome }      : {}),
+        ...(housingExpenses       !== null ? { housingExpenses }       : {}),
+        ...(transportationExpenses !== null ? { transportationExpenses } : {}),
+        ...(dependentCareExpenses  !== null ? { dependentCareExpenses }  : {}),
+        ...(isEmployed            !== null ? { isEmployed }            : {}),
+        ...(workInFieldOfStudy    !== null ? { workInFieldOfStudy }    : {}),
+        ...(unemployed5PlusYears  !== null ? { unemployed5PlusYears }  : {}),
+        ...(hasDisability         !== null ? { hasDisability }         : {}),
+        ...(didGraduate           !== null ? { didGraduate }           : {}),
+        ...(schoolClosed          !== null ? { schoolClosed }          : {}),
+        ...(is65OrOlder           !== null ? { is65OrOlder }           : {}),
+        ...(lastAttendedSchool              ? { lastAttendedSchool }    : {}),
+      };
+
+      // ── 7. Run discharge probability engine ───────────────────────────────
+      //    Cast to DischargeSnapshot so the analyser can type-check against it.
+      //    Fields not in this submission default to null/false in the engine.
+      const analysis = calculateDischargeProbability({
+        ...snapshotData,
+        // Supply required non-nullable defaults for the analyser type contract
+        id:        '',
+        clientId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        // Fields not set by the wizard default to null / false
+        rentExpense:            null,
+        medicalExpense:         null,
+        utilitiesExpense:       null,
+        homeMaintenanceExpense: null,
+        carInsuranceExpense:    null,
+        gasExpense:             null,
+        flaggedDocuments:       null,
+        ownsVehicle:            null,
+        militaryBranch:         null,
+        militaryStartDate:      null,
+        militaryEndDate:        null,
+        dischargeCharacterization: null,
+        appliedForIDR:          false,
+        madePriorPayments:      false,
+        contactedServicer:      false,
+        isDischargeable:        null,
+      } as DischargeSnapshot);
+
+      // ── 8. Persist inside a transaction ───────────────────────────────────
+      const prisma = getPrisma();
+
+      const result = await prisma.$transaction(async (tx) => {
+        // Verify the client exists
+        const client = await tx.client.findUnique({
+          where:  { id: clientId },
+          select: { id: true },
+        });
+        if (!client) return null;
+
+        // Update client identity (name, phone) and mark intake complete
+        const nameUpdate: Record<string, string> = {};
+        if (firstName && lastName) nameUpdate.name = `${firstName} ${lastName}`;
+        else if (firstName)         nameUpdate.name = firstName;
+
+        await tx.client.update({
+          where: { id: clientId },
+          data: {
+            ...nameUpdate,
+            ...(phone ? { phone } : {}),
+            intakeStatus: 'Complete',
+          },
+        });
+
+        // Create the DischargeSnapshot
+        const snapshot = await tx.dischargeSnapshot.create({
+          data: {
+            clientId,
+            ...snapshotData,
+            isDischargeable: analysis.isDischargeable,
+            status:          analysis.status,
+          },
+        });
+
+        return snapshot;
+      });
+
+      if (!result) {
+        res.status(404).json({ error: 'Client not found' });
+        return;
+      }
+
+      res.status(200).json({ success: true, snapshot: result });
+
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
+
