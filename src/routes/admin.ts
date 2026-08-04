@@ -683,6 +683,27 @@ function parseOptionalAssignmentField(value: unknown): string | null | undefined
   return trimmed ? trimmed : null;
 }
 
+function toSnapshotBool(val: unknown): boolean | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  if (typeof val === 'boolean') return val;
+  const s = String(val).toLowerCase().trim();
+  if (s === 'yes' || s === 'true')  return true;
+  if (s === 'no'  || s === 'false') return false;
+  return undefined;
+}
+
+function toSnapshotDate(val: unknown): Date | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  const d = new Date(String(val));
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined)
+  ) as Partial<T>;
+}
+
 // =============================================================================
 // PATCH /api/v1/admin/clients/:id/assign
 //
@@ -807,6 +828,103 @@ router.patch(
 
       res.status(200).json({ client: withNameParts(updatedClient) });
     } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PATCH /api/v1/admin/clients/:id/snapshot
+//
+// Updates the latest DischargeSnapshot DOJ parameters for a client. Used by the
+// Staff Scoreboard when staff adjusts DOJ analyzer inputs inline.
+//
+// Request body:
+//   hasDisability?:      boolean | "yes" | "no" | "true" | "false"
+//   didGraduate?:        boolean | "yes" | "no" | "true" | "false"
+//   schoolClosed?:       boolean | "yes" | "no" | "true" | "false"
+//   is65OrOlder?:        boolean | "yes" | "no" | "true" | "false"
+//   lastAttendedSchool?: string | Date
+// =============================================================================
+
+router.patch(
+  '/clients/:id/snapshot',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+      const body = req.body as {
+        hasDisability?:      unknown;
+        didGraduate?:        unknown;
+        schoolClosed?:       unknown;
+        is65OrOlder?:        unknown;
+        lastAttendedSchool?: unknown;
+      };
+
+      const snapshotData = removeUndefinedValues({
+        hasDisability:      toSnapshotBool(body.hasDisability),
+        didGraduate:        toSnapshotBool(body.didGraduate),
+        schoolClosed:       toSnapshotBool(body.schoolClosed),
+        is65OrOlder:        toSnapshotBool(body.is65OrOlder),
+        lastAttendedSchool: toSnapshotDate(body.lastAttendedSchool),
+      });
+
+      if (Object.keys(snapshotData).length === 0) {
+        res.status(400).json({
+          error: 'At least one DOJ snapshot field is required.',
+        });
+        return;
+      }
+
+      const client = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!client) {
+        res.status(404).json({ error: 'Client not found.' });
+        return;
+      }
+
+      const latestSnapshot = await prisma.dischargeSnapshot.findFirst({
+        where:   { clientId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (!latestSnapshot) {
+        res.status(404).json({ error: 'Discharge snapshot not found.' });
+        return;
+      }
+
+      const rawUpdatedSnapshot = await prisma.dischargeSnapshot.update({
+        where: { id: latestSnapshot.id },
+        data:  snapshotData,
+      });
+      const analysis = calculateDischargeProbability(rawUpdatedSnapshot);
+
+      const updatedSnapshot = await prisma.dischargeSnapshot.update({
+        where: { id: latestSnapshot.id },
+        data: {
+          isDischargeable: analysis.isDischargeable,
+          status:          analysis.status,
+        },
+      });
+
+      console.log(`[admin] DischargeSnapshot ${latestSnapshot.id} DOJ fields updated for client ${clientId}`);
+
+      res.status(200).json({ snapshot: updatedSnapshot });
+    } catch (err) {
+      const errName = (err as Error)?.constructor?.name ?? '';
+      if (
+        errName === 'PrismaClientValidationError' ||
+        errName === 'PrismaClientKnownRequestError'
+      ) {
+        res.status(400).json({
+          error: 'Validation error: invalid or missing fields in discharge snapshot payload.',
+          detail: (err as Error).message,
+        });
+        return;
+      }
       next(err);
     }
   }
@@ -2428,17 +2546,17 @@ router.put(
         madePriorPayments:      toBool(madePriorPayments)       ?? undefined,
         contactedServicer:      toBool(contactedServicer)       ?? undefined,
       };
-      const analysis = calculateDischargeProbability({
-        ...existing,
-        ...snapshotData,
-      } as DischargeSnapshot);
+      const rawUpdatedSnapshot = await prisma.dischargeSnapshot.update({
+        where: { id: snapshotId },
+        data:  snapshotData,
+      });
+      const analysis = calculateDischargeProbability(rawUpdatedSnapshot);
 
       const updatedSnapshot = await prisma.dischargeSnapshot.update({
         where: { id: snapshotId },
         data: {
-          ...snapshotData,
-          isDischargeable:        analysis.isDischargeable,
-          status:                 analysis.status,
+          isDischargeable: analysis.isDischargeable,
+          status:          analysis.status,
         },
       });
 
