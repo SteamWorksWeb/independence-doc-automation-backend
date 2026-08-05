@@ -907,6 +907,11 @@ router.patch(
       const prisma   = getPrisma();
       const clientId = String(req.params.id);
       const body = req.body as {
+        // Client identity fields
+        firstName?:              unknown;
+        lastName?:               unknown;
+        email?:                  unknown;
+        phone?:                  unknown;
         // Loan
         hasFederalLoans?:        unknown;
         outstandingBalance?:     unknown;
@@ -984,6 +989,25 @@ router.patch(
       if (!client) {
         res.status(404).json({ error: 'Client not found.' });
         return;
+      }
+
+      // ── Update Client identity fields if provided ───────────────────────────
+      const firstName = typeof body.firstName === 'string' ? body.firstName.trim() : undefined;
+      const lastName  = typeof body.lastName  === 'string' ? body.lastName.trim()  : undefined;
+      const email     = typeof body.email     === 'string' ? body.email.trim()     : undefined;
+      const phone     = typeof body.phone     === 'string' ? body.phone.trim()     : undefined;
+
+      const clientUpdateData: Record<string, string> = {};
+      if (firstName && lastName) clientUpdateData.name = `${firstName} ${lastName}`;
+      else if (firstName)        clientUpdateData.name = firstName;
+      if (email)                 clientUpdateData.email = email;
+      if (phone !== undefined)   clientUpdateData.phone = phone;
+
+      if (Object.keys(clientUpdateData).length > 0) {
+        await prisma.client.update({
+          where: { id: clientId },
+          data:  clientUpdateData,
+        });
       }
 
       const latestSnapshot = await prisma.dischargeSnapshot.findFirst({
