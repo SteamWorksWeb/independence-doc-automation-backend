@@ -151,7 +151,7 @@ export async function sendBorrowerInviteEmail(
   toEmail: string,
   intakeLink: string,
 ): Promise<void> {
-  const html = buildBorrowerInviteEmailHtml(intakeLink);
+  const html = buildBorrowerInviteEmailHtml(toEmail, intakeLink);
 
   let sendError: unknown;
 
@@ -608,7 +608,7 @@ function buildInviteEmailHtml(inviteLink: string): string {
 //   White #FFFFFF  (card background)
 //   Text  #2D2D2D  (body text)
 // =============================================================================
-function buildBorrowerInviteEmailHtml(intakeLink: string): string {
+function buildBorrowerInviteEmailHtml(recipientEmail: string, intakeLink: string): string {
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -695,6 +695,17 @@ function buildBorrowerInviteEmailHtml(intakeLink: string): string {
                 Please click the button below to begin your
                 <strong>Discharge Snapshot Intake Questionnaire</strong>.
                 This link is valid for <strong>7 days</strong> and can only be used once.
+              </p>
+
+              <p style="
+                margin: 0 0 32px;
+                font-size: 14px;
+                line-height: 1.7;
+                color: #555555;
+                font-family: Arial, Helvetica, sans-serif;
+              ">
+                This questionnaire has been prepared for:
+                <strong style="color: #0D1B2A;">${recipientEmail}</strong>
               </p>
 
               <!-- CTA Button -->
