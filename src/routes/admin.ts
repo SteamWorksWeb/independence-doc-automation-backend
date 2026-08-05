@@ -1211,7 +1211,21 @@ router.post(
         select: { id: true },
       });
       if (existingClient) {
-        res.status(400).json({ error: 'A client with this email already exists.' });
+        res.status(400).json({ error: 'A client or borrower with this email already exists.' });
+        return;
+      }
+
+      // ── Reject if a pending invitation for this email already exists ───────
+      //   Covers both active (expiresAt > now) and expired-but-not-revoked.
+      //   Admin must use Manage Invites → Resend to refresh, or Revoke to clear.
+      const existingInvitation = await prisma.invitation.findFirst({
+        where: { email: normalizedEmail, isUsed: false },
+        select: { id: true },
+      });
+      if (existingInvitation) {
+        res.status(400).json({
+          error: 'An invitation for this email already exists. Use the Manage Invites page to resend or revoke it.',
+        });
         return;
       }
 
@@ -2067,7 +2081,19 @@ router.post(
         select: { id: true },
       });
       if (existingClient) {
-        res.status(400).json({ error: 'A client with this email already exists.' });
+        res.status(400).json({ error: 'A client or borrower with this email already exists.' });
+        return;
+      }
+
+      // ── Reject if a pending invitation for this email already exists ───────
+      const existingInvitation = await prisma.invitation.findFirst({
+        where: { email: normalizedEmail, isUsed: false },
+        select: { id: true },
+      });
+      if (existingInvitation) {
+        res.status(400).json({
+          error: 'An invitation for this email already exists. Use the Manage Invites page to resend or revoke it.',
+        });
         return;
       }
 
@@ -2542,7 +2568,19 @@ router.post(
         select: { id: true },
       });
       if (existingClient) {
-        res.status(400).json({ error: 'A client with this email already exists.' });
+        res.status(400).json({ error: 'A client or borrower with this email already exists.' });
+        return;
+      }
+
+      // ── Reject if a pending invitation for this email already exists ───────
+      const existingInvitation = await prisma.invitation.findFirst({
+        where: { email: normalizedEmail, isUsed: false },
+        select: { id: true },
+      });
+      if (existingInvitation) {
+        res.status(400).json({
+          error: 'An invitation for this email already exists. Use the Manage Invites page to resend or revoke it.',
+        });
         return;
       }
 
