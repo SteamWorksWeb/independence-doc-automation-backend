@@ -16,10 +16,28 @@
 //     (Do NOT change this to onboarding@resend.dev — that sandbox address
 //      silently fails for all recipients except the API key owner.)
 //
-// Template origin: Liberty Law brand palette — navy / gold / off-white.
+// Brand palette (updated — matches the Liberty Law web application):
+//   Navy    #1A2744  (primary background, header, footer)
+//   Crimson #B31E3C  (CTA buttons, accent rule, decorative dividers)
+//   Light   #F2F4F7  (body background)
+//   White   #FFFFFF  (card background)
+//   Text    #1A2744  (headings)
+//   Muted   #555F6E  (body/secondary text)
 // =============================================================================
 
 import { Resend } from 'resend';
+
+// ── Brand constants ────────────────────────────────────────────────────────────
+// Update LOGO_URL if the Vercel deployment URL changes.
+const LOGO_URL      = 'https://independence-doc-automation.vercel.app/logo.png';
+
+const COLOR_NAVY    = '#1A2744';
+const COLOR_CRIMSON = '#B31E3C';
+const COLOR_BG      = '#F2F4F7';
+const COLOR_WHITE   = '#FFFFFF';
+const COLOR_TEXT    = '#1A2744';
+const COLOR_MUTED   = '#555F6E';
+const COLOR_BORDER  = '#E5E7EB';
 
 // ── Env guard ─────────────────────────────────────────────────────────────────
 // These are validated at server startup in server.ts. We re-check here so
@@ -42,6 +60,213 @@ const resend = new Resend(RESEND_API_KEY);
 // In production this will be the Vercel deployment URL.
 // Controlled via FRONTEND_URL env var; falls back to localhost for development.
 const FRONTEND_URL = process.env.FRONTEND_URL ?? 'http://localhost:3000';
+
+// =============================================================================
+// Shared HTML shell builder
+//
+// Builds a complete email document with the Liberty Law brand header and
+// footer. Each template passes in a content block for the body section.
+//
+// @param title       — <title> and browser tab text
+// @param headerTitle — White h1 text inside the navy header
+// @param bodyHtml    — Raw HTML for the body content area
+// =============================================================================
+function buildEmailShell(
+  title:       string,
+  headerTitle: string,
+  bodyHtml:    string,
+): string {
+  const year = new Date().getFullYear();
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${title}</title>
+</head>
+<body style="
+  margin: 0;
+  padding: 0;
+  background-color: ${COLOR_BG};
+  font-family: Arial, Helvetica, sans-serif;
+  color: ${COLOR_MUTED};
+">
+
+  <!-- Outer wrapper -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td align="center" style="padding: 40px 16px;">
+
+        <!-- Card -->
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+               style="max-width: 600px; width: 100%; background-color: ${COLOR_WHITE};
+                      border-radius: 6px; overflow: hidden;
+                      box-shadow: 0 4px 16px rgba(0,0,0,0.10);">
+
+          <!-- ── Header ── -->
+          <tr>
+            <td style="
+              background-color: ${COLOR_NAVY};
+              padding: 32px 40px 28px;
+              text-align: center;
+            ">
+              <!-- Official Liberty Law logo -->
+              <img
+                src="${LOGO_URL}"
+                alt="Liberty Law"
+                width="150"
+                style="
+                  display: block;
+                  margin: 0 auto 20px;
+                  max-width: 150px;
+                  height: auto;
+                  border: 0;
+                "
+              />
+              <!-- Email-specific heading -->
+              <h1 style="
+                margin: 0;
+                font-size: 22px;
+                font-weight: 600;
+                color: ${COLOR_WHITE};
+                font-family: Georgia, 'Times New Roman', serif;
+                letter-spacing: 0.5px;
+              ">${headerTitle}</h1>
+              <!-- Crimson accent rule -->
+              <div style="
+                width: 40px;
+                height: 3px;
+                background-color: ${COLOR_CRIMSON};
+                margin: 14px auto 0;
+                border-radius: 2px;
+              "></div>
+            </td>
+          </tr>
+
+          <!-- ── Body ── -->
+          <tr>
+            <td style="padding: 44px 40px 36px;">
+              ${bodyHtml}
+            </td>
+          </tr>
+
+          <!-- ── Footer ── -->
+          <tr>
+            <td style="
+              background-color: ${COLOR_NAVY};
+              padding: 20px 40px;
+              text-align: center;
+              border-top: 3px solid ${COLOR_CRIMSON};
+            ">
+              <p style="
+                margin: 0 0 6px;
+                font-size: 10px;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                color: rgba(255,255,255,0.55);
+                font-family: Arial, Helvetica, sans-serif;
+              ">Confidential &nbsp;·&nbsp; Attorney–Client Privileged</p>
+              <p style="
+                margin: 0;
+                font-size: 11px;
+                color: rgba(255,255,255,0.35);
+                font-family: Arial, Helvetica, sans-serif;
+              ">© ${year} Liberty Law. All rights reserved.</p>
+            </td>
+          </tr>
+
+        </table>
+        <!-- /Card -->
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>
+  `.trim();
+}
+
+// =============================================================================
+// Shared CTA button builder
+//
+// Returns an HTML table-based button (required for reliable Outlook rendering).
+// =============================================================================
+function buildCtaButton(href: string, label: string): string {
+  return `
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 36px;">
+  <tr>
+    <td style="
+      background-color: ${COLOR_CRIMSON};
+      border-radius: 4px;
+    ">
+      <a href="${href}"
+         target="_blank"
+         style="
+           display: inline-block;
+           padding: 14px 40px;
+           font-family: Arial, Helvetica, sans-serif;
+           font-size: 14px;
+           font-weight: bold;
+           letter-spacing: 1px;
+           color: ${COLOR_WHITE};
+           text-decoration: none;
+           text-transform: uppercase;
+         ">
+        ${label}
+      </a>
+    </td>
+  </tr>
+</table>`;
+}
+
+// =============================================================================
+// Shared fallback URL block builder
+// =============================================================================
+function buildFallbackUrl(url: string): string {
+  return `
+<p style="
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #9CA3AF;
+  font-family: Arial, Helvetica, sans-serif;
+">
+  If the button does not work, copy and paste this URL into your browser:
+</p>
+<p style="
+  margin: 0 0 32px;
+  font-size: 12px;
+  word-break: break-all;
+  font-family: 'Courier New', Courier, monospace;
+  color: ${COLOR_CRIMSON};
+">
+  ${url}
+</p>`;
+}
+
+// =============================================================================
+// Shared security notice block builder
+// =============================================================================
+function buildSecurityNote(text: string): string {
+  return `
+<div style="
+  border-top: 1px solid ${COLOR_BORDER};
+  padding-top: 24px;
+  margin-top: 8px;
+">
+  <p style="
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #9CA3AF;
+    font-family: Arial, Helvetica, sans-serif;
+  ">
+    ${text}
+  </p>
+</div>`;
+}
 
 // =============================================================================
 // sendVerificationEmail
@@ -185,628 +410,153 @@ export async function sendBorrowerInviteEmail(
 
 // =============================================================================
 // buildVerificationEmailHtml (private)
-
-//
-// Returns a self-contained HTML string. Inline styles are intentional —
-// most email clients strip <style> blocks.
-//
-// Brand palette:
-//   Navy  #0D1B2A  (primary background, header)
-//   Gold  #C9A84C  (accent, CTA button)
-//   Light #F5F1EB  (body background)
-//   White #FFFFFF  (card background)
-//   Text  #2D2D2D  (body text)
 // =============================================================================
 function buildVerificationEmailHtml(verifyUrl: string): string {
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Verify your Liberty Law Portal access</title>
-</head>
-<body style="
-  margin: 0;
-  padding: 0;
-  background-color: #F5F1EB;
-  font-family: Georgia, 'Times New Roman', serif;
-  color: #2D2D2D;
-">
+  const body = `
+    <p style="
+      margin: 0 0 20px;
+      font-size: 16px;
+      line-height: 1.75;
+      color: ${COLOR_TEXT};
+      font-family: Georgia, 'Times New Roman', serif;
+    ">
+      You have been invited to access your secure client portal with
+      Liberty Law. Please verify your email address to complete your
+      registration and gain access to your case documents.
+    </p>
 
-  <!-- Outer wrapper -->
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-    <tr>
-      <td align="center" style="padding: 40px 16px;">
+    <p style="
+      margin: 0 0 32px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: ${COLOR_MUTED};
+      font-family: Arial, Helvetica, sans-serif;
+    ">
+      Click the button below to verify your email address. This link
+      is valid for <strong style="color:${COLOR_TEXT};">24 hours</strong>
+      and can only be used once.
+    </p>
 
-        <!-- Card -->
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
-               style="max-width: 600px; width: 100%; background-color: #FFFFFF;
-                      border-radius: 4px; overflow: hidden;
-                      box-shadow: 0 2px 8px rgba(0,0,0,0.10);">
+    ${buildCtaButton(verifyUrl, 'Verify My Email')}
+    ${buildFallbackUrl(verifyUrl)}
+    ${buildSecurityNote(
+      'If you did not request access to the Liberty Law Client Portal, ' +
+      'you may safely disregard this email. No account will be created ' +
+      'without email verification. For security concerns, please contact ' +
+      'your attorney directly.'
+    )}
+  `;
 
-          <!-- Header -->
-          <tr>
-            <td style="
-              background-color: #0D1B2A;
-              padding: 36px 40px;
-              text-align: center;
-            ">
-              <!-- Wordmark -->
-              <p style="
-                margin: 0;
-                font-size: 11px;
-                letter-spacing: 4px;
-                text-transform: uppercase;
-                color: #C9A84C;
-                font-family: Arial, Helvetica, sans-serif;
-              ">LIBERTY LAW</p>
-              <h1 style="
-                margin: 10px 0 0;
-                font-size: 26px;
-                font-weight: normal;
-                color: #FFFFFF;
-                letter-spacing: 1px;
-              ">Client Portal</h1>
-              <!-- Decorative rule -->
-              <div style="
-                width: 48px;
-                height: 2px;
-                background-color: #C9A84C;
-                margin: 16px auto 0;
-              "></div>
-            </td>
-          </tr>
-
-          <!-- Body -->
-          <tr>
-            <td style="padding: 44px 40px 32px;">
-
-              <p style="
-                margin: 0 0 20px;
-                font-size: 16px;
-                line-height: 1.7;
-                color: #2D2D2D;
-              ">
-                You have been invited to access your secure client portal with
-                Liberty Law. Please verify your email address to
-                complete your registration and gain access to your case documents.
-              </p>
-
-              <p style="
-                margin: 0 0 32px;
-                font-size: 15px;
-                line-height: 1.7;
-                color: #555555;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                Click the button below to verify your email address. This link
-                is valid for <strong>24 hours</strong> and can only be used once.
-              </p>
-
-              <!-- CTA Button -->
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 36px;">
-                <tr>
-                  <td style="
-                    background-color: #C9A84C;
-                    border-radius: 3px;
-                  ">
-                    <a href="${verifyUrl}"
-                       target="_blank"
-                       style="
-                         display: inline-block;
-                         padding: 14px 36px;
-                         font-family: Arial, Helvetica, sans-serif;
-                         font-size: 15px;
-                         font-weight: bold;
-                         letter-spacing: 1px;
-                         color: #0D1B2A;
-                         text-decoration: none;
-                         text-transform: uppercase;
-                       ">
-                      Verify My Email
-                    </a>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Fallback URL -->
-              <p style="
-                margin: 0 0 8px;
-                font-size: 12px;
-                color: #888888;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                If the button does not work, copy and paste this URL into your browser:
-              </p>
-              <p style="
-                margin: 0 0 32px;
-                font-size: 12px;
-                word-break: break-all;
-                font-family: 'Courier New', Courier, monospace;
-                color: #0D1B2A;
-              ">
-                ${verifyUrl}
-              </p>
-
-              <!-- Security note -->
-              <div style="
-                border-top: 1px solid #E8E4DD;
-                padding-top: 24px;
-                margin-top: 8px;
-              ">
-                <p style="
-                  margin: 0;
-                  font-size: 13px;
-                  line-height: 1.6;
-                  color: #888888;
-                  font-family: Arial, Helvetica, sans-serif;
-                ">
-                  If you did not request access to the Liberty Law Client Portal,
-                  you may safely disregard this email. No account will be created
-                  without email verification. For security concerns, please contact
-                  your attorney directly.
-                </p>
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="
-              background-color: #0D1B2A;
-              padding: 24px 40px;
-              text-align: center;
-            ">
-              <p style="
-                margin: 0;
-                font-size: 11px;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: #C9A84C;
-                font-family: Arial, Helvetica, sans-serif;
-              ">Confidential &nbsp;·&nbsp; Attorney–Client Privileged</p>
-              <p style="
-                margin: 8px 0 0;
-                font-size: 11px;
-                color: #5C7080;
-                font-family: Arial, Helvetica, sans-serif;
-              ">© ${new Date().getFullYear()} Liberty Law. All rights reserved.</p>
-            </td>
-          </tr>
-
-        </table>
-        <!-- /Card -->
-
-      </td>
-    </tr>
-  </table>
-
-</body>
-</html>
-  `.trim();
+  return buildEmailShell(
+    'Verify your Liberty Law Portal access',
+    'Client Portal',
+    body,
+  );
 }
 
 // =============================================================================
 // buildInviteEmailHtml (private)
-//
-// Returns a self-contained HTML string for the client portal invitation email.
-// Inline styles are intentional — most email clients strip <style> blocks.
-//
-// Brand palette:
-//   Navy  #0D1B2A  (primary background, header)
-//   Gold  #C9A84C  (accent, CTA button)
-//   Light #F5F1EB  (body background)
-//   White #FFFFFF  (card background)
-//   Text  #2D2D2D  (body text)
 // =============================================================================
 function buildInviteEmailHtml(inviteLink: string): string {
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>You have been invited to the Liberty Law Client Portal</title>
-</head>
-<body style="
-  margin: 0;
-  padding: 0;
-  background-color: #F5F1EB;
-  font-family: Georgia, 'Times New Roman', serif;
-  color: #2D2D2D;
-">
+  const body = `
+    <p style="
+      margin: 0 0 20px;
+      font-size: 16px;
+      line-height: 1.75;
+      color: ${COLOR_TEXT};
+      font-family: Georgia, 'Times New Roman', serif;
+    ">
+      Your attorney has invited you to access your secure client portal with
+      Liberty Law. This portal gives you direct access to your case documents,
+      eligibility status, and secure communication with your legal team.
+    </p>
 
-  <!-- Outer wrapper -->
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-    <tr>
-      <td align="center" style="padding: 40px 16px;">
+    <p style="
+      margin: 0 0 32px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: ${COLOR_MUTED};
+      font-family: Arial, Helvetica, sans-serif;
+    ">
+      Click the button below to create your account. This invitation link
+      is valid for <strong style="color:${COLOR_TEXT};">7 days</strong>
+      and can only be used once.
+    </p>
 
-        <!-- Card -->
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
-               style="max-width: 600px; width: 100%; background-color: #FFFFFF;
-                      border-radius: 4px; overflow: hidden;
-                      box-shadow: 0 2px 8px rgba(0,0,0,0.10);">
+    ${buildCtaButton(inviteLink, 'Accept Invitation')}
+    ${buildFallbackUrl(inviteLink)}
+    ${buildSecurityNote(
+      'If you did not expect this invitation, you may safely disregard this ' +
+      'email. No account will be created without your action. For questions, ' +
+      'contact your attorney directly.'
+    )}
+  `;
 
-          <!-- Header -->
-          <tr>
-            <td style="
-              background-color: #0D1B2A;
-              padding: 36px 40px;
-              text-align: center;
-            ">
-              <p style="
-                margin: 0;
-                font-size: 11px;
-                letter-spacing: 4px;
-                text-transform: uppercase;
-                color: #C9A84C;
-                font-family: Arial, Helvetica, sans-serif;
-              ">LIBERTY LAW</p>
-              <h1 style="
-                margin: 10px 0 0;
-                font-size: 26px;
-                font-weight: normal;
-                color: #FFFFFF;
-                letter-spacing: 1px;
-              ">Client Portal Invitation</h1>
-              <div style="
-                width: 48px;
-                height: 2px;
-                background-color: #C9A84C;
-                margin: 16px auto 0;
-              "></div>
-            </td>
-          </tr>
-
-          <!-- Body -->
-          <tr>
-            <td style="padding: 44px 40px 32px;">
-
-              <p style="
-                margin: 0 0 20px;
-                font-size: 16px;
-                line-height: 1.7;
-                color: #2D2D2D;
-              ">
-                Your attorney has invited you to access your secure client portal
-                with Liberty Law. This portal gives you direct access
-                to your case documents, eligibility status, and secure communication
-                with your legal team.
-              </p>
-
-              <p style="
-                margin: 0 0 32px;
-                font-size: 15px;
-                line-height: 1.7;
-                color: #555555;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                Click the button below to create your account. This invitation link
-                is valid for <strong>7 days</strong> and can only be used once.
-              </p>
-
-              <!-- CTA Button -->
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 36px;">
-                <tr>
-                  <td style="
-                    background-color: #C9A84C;
-                    border-radius: 3px;
-                  ">
-                    <a href="${inviteLink}"
-                       target="_blank"
-                       style="
-                         display: inline-block;
-                         padding: 14px 36px;
-                         font-family: Arial, Helvetica, sans-serif;
-                         font-size: 15px;
-                         font-weight: bold;
-                         letter-spacing: 1px;
-                         color: #0D1B2A;
-                         text-decoration: none;
-                         text-transform: uppercase;
-                       ">
-                      Accept Invitation
-                    </a>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Fallback URL -->
-              <p style="
-                margin: 0 0 8px;
-                font-size: 12px;
-                color: #888888;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                If the button does not work, copy and paste this URL into your browser:
-              </p>
-              <p style="
-                margin: 0 0 32px;
-                font-size: 12px;
-                word-break: break-all;
-                font-family: 'Courier New', Courier, monospace;
-                color: #0D1B2A;
-              ">
-                ${inviteLink}
-              </p>
-
-              <!-- Security note -->
-              <div style="
-                border-top: 1px solid #E8E4DD;
-                padding-top: 24px;
-                margin-top: 8px;
-              ">
-                <p style="
-                  margin: 0;
-                  font-size: 13px;
-                  line-height: 1.6;
-                  color: #888888;
-                  font-family: Arial, Helvetica, sans-serif;
-                ">
-                  If you did not expect this invitation, you may safely disregard
-                  this email. No account will be created without your action.
-                  For questions, contact your attorney directly.
-                </p>
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="
-              background-color: #0D1B2A;
-              padding: 24px 40px;
-              text-align: center;
-            ">
-              <p style="
-                margin: 0;
-                font-size: 11px;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: #C9A84C;
-                font-family: Arial, Helvetica, sans-serif;
-              ">Confidential &nbsp;·&nbsp; Attorney–Client Privileged</p>
-              <p style="
-                margin: 8px 0 0;
-                font-size: 11px;
-                color: #5C7080;
-                font-family: Arial, Helvetica, sans-serif;
-              ">© ${new Date().getFullYear()} Liberty Law. All rights reserved.</p>
-            </td>
-          </tr>
-
-        </table>
-        <!-- /Card -->
-
-      </td>
-    </tr>
-  </table>
-
-</body>
-</html>
-  `.trim();
+  return buildEmailShell(
+    'You have been invited to the Liberty Law Client Portal',
+    'Client Portal Invitation',
+    body,
+  );
 }
 
 // =============================================================================
 // buildBorrowerInviteEmailHtml (private)
 //
-// Returns a self-contained HTML string for the Discharge Snapshot intake
-// invitation. Inline styles are intentional — most email clients strip
-// <style> blocks.
-//
 // IMPORTANT: This template must NEVER use the word "Client". The recipient
 // is addressed as a "borrower" throughout. The CTA is scoped specifically to
 // the "Discharge Snapshot Intake Questionnaire" workflow.
-//
-// Brand palette:
-//   Navy  #0D1B2A  (primary background, header)
-//   Gold  #C9A84C  (accent, CTA button)
-//   Light #F5F1EB  (body background)
-//   White #FFFFFF  (card background)
-//   Text  #2D2D2D  (body text)
 // =============================================================================
 function buildBorrowerInviteEmailHtml(recipientEmail: string, intakeLink: string): string {
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Complete Your Discharge Snapshot Intake Questionnaire</title>
-</head>
-<body style="
-  margin: 0;
-  padding: 0;
-  background-color: #F5F1EB;
-  font-family: Georgia, 'Times New Roman', serif;
-  color: #2D2D2D;
-">
+  const body = `
+    <p style="
+      margin: 0 0 20px;
+      font-size: 16px;
+      line-height: 1.75;
+      color: ${COLOR_TEXT};
+      font-family: Georgia, 'Times New Roman', serif;
+    ">
+      Liberty Law has opened a secure intake questionnaire on your behalf as
+      part of the student loan discharge review process. Your responses will
+      allow our team to assess your discharge eligibility and prepare your
+      case file.
+    </p>
 
-  <!-- Outer wrapper -->
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-    <tr>
-      <td align="center" style="padding: 40px 16px;">
+    <p style="
+      margin: 0 0 20px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: ${COLOR_MUTED};
+      font-family: Arial, Helvetica, sans-serif;
+    ">
+      Please click the button below to begin your
+      <strong style="color:${COLOR_TEXT};">Discharge Snapshot Intake Questionnaire</strong>.
+      This link is valid for <strong style="color:${COLOR_TEXT};">7 days</strong>
+      and can only be used once.
+    </p>
 
-        <!-- Card -->
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
-               style="max-width: 600px; width: 100%; background-color: #FFFFFF;
-                      border-radius: 4px; overflow: hidden;
-                      box-shadow: 0 2px 8px rgba(0,0,0,0.10);">
+    <p style="
+      margin: 0 0 32px;
+      font-size: 14px;
+      line-height: 1.7;
+      color: ${COLOR_MUTED};
+      font-family: Arial, Helvetica, sans-serif;
+    ">
+      This questionnaire has been prepared for:
+      <strong style="color: ${COLOR_CRIMSON};">${recipientEmail}</strong>
+    </p>
 
-          <!-- Header -->
-          <tr>
-            <td style="
-              background-color: #0D1B2A;
-              padding: 36px 40px;
-              text-align: center;
-            ">
-              <!-- Wordmark -->
-              <p style="
-                margin: 0;
-                font-size: 11px;
-                letter-spacing: 4px;
-                text-transform: uppercase;
-                color: #C9A84C;
-                font-family: Arial, Helvetica, sans-serif;
-              ">LIBERTY LAW</p>
-              <h1 style="
-                margin: 10px 0 0;
-                font-size: 26px;
-                font-weight: normal;
-                color: #FFFFFF;
-                letter-spacing: 1px;
-              ">Discharge Snapshot Validation</h1>
-              <!-- Decorative rule -->
-              <div style="
-                width: 48px;
-                height: 2px;
-                background-color: #C9A84C;
-                margin: 16px auto 0;
-              "></div>
-            </td>
-          </tr>
+    ${buildCtaButton(intakeLink, 'Begin Intake Questionnaire')}
+    ${buildFallbackUrl(intakeLink)}
+    ${buildSecurityNote(
+      'If you did not expect this message, you may safely disregard it. ' +
+      'No information will be submitted without your action. For questions, ' +
+      'please contact your attorney directly.'
+    )}
+  `;
 
-          <!-- Body -->
-          <tr>
-            <td style="padding: 44px 40px 32px;">
-
-              <p style="
-                margin: 0 0 20px;
-                font-size: 16px;
-                line-height: 1.7;
-                color: #2D2D2D;
-              ">
-                Liberty Law has opened a secure intake questionnaire
-                on your behalf as part of the student loan discharge review process.
-                Your responses will allow our team to assess your discharge eligibility
-                and prepare your case file.
-              </p>
-
-              <p style="
-                margin: 0 0 32px;
-                font-size: 15px;
-                line-height: 1.7;
-                color: #555555;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                Please click the button below to begin your
-                <strong>Discharge Snapshot Intake Questionnaire</strong>.
-                This link is valid for <strong>7 days</strong> and can only be used once.
-              </p>
-
-              <p style="
-                margin: 0 0 32px;
-                font-size: 14px;
-                line-height: 1.7;
-                color: #555555;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                This questionnaire has been prepared for:
-                <strong style="color: #0D1B2A;">${recipientEmail}</strong>
-              </p>
-
-              <!-- CTA Button -->
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 36px;">
-                <tr>
-                  <td style="
-                    background-color: #C9A84C;
-                    border-radius: 3px;
-                  ">
-                    <a href="${intakeLink}"
-                       target="_blank"
-                       style="
-                         display: inline-block;
-                         padding: 14px 36px;
-                         font-family: Arial, Helvetica, sans-serif;
-                         font-size: 15px;
-                         font-weight: bold;
-                         letter-spacing: 1px;
-                         color: #0D1B2A;
-                         text-decoration: none;
-                         text-transform: uppercase;
-                       ">
-                      Begin Intake Questionnaire
-                    </a>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Fallback URL -->
-              <p style="
-                margin: 0 0 8px;
-                font-size: 12px;
-                color: #888888;
-                font-family: Arial, Helvetica, sans-serif;
-              ">
-                If the button does not work, copy and paste this URL into your browser:
-              </p>
-              <p style="
-                margin: 0 0 32px;
-                font-size: 12px;
-                word-break: break-all;
-                font-family: 'Courier New', Courier, monospace;
-                color: #0D1B2A;
-              ">
-                ${intakeLink}
-              </p>
-
-              <!-- Security note -->
-              <div style="
-                border-top: 1px solid #E8E4DD;
-                padding-top: 24px;
-                margin-top: 8px;
-              ">
-                <p style="
-                  margin: 0;
-                  font-size: 13px;
-                  line-height: 1.6;
-                  color: #888888;
-                  font-family: Arial, Helvetica, sans-serif;
-                ">
-                  If you did not expect this message, you may safely disregard it.
-                  No information will be submitted without your action. For questions,
-                  please contact your attorney directly.
-                </p>
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="
-              background-color: #0D1B2A;
-              padding: 24px 40px;
-              text-align: center;
-            ">
-              <p style="
-                margin: 0;
-                font-size: 11px;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: #C9A84C;
-                font-family: Arial, Helvetica, sans-serif;
-              ">Confidential &nbsp;·&nbsp; Attorney–Client Privileged</p>
-              <p style="
-                margin: 8px 0 0;
-                font-size: 11px;
-                color: #5C7080;
-                font-family: Arial, Helvetica, sans-serif;
-              ">© ${new Date().getFullYear()} Liberty Law. All rights reserved.</p>
-            </td>
-          </tr>
-
-        </table>
-        <!-- /Card -->
-
-      </td>
-    </tr>
-  </table>
-
-</body>
-</html>
-  `.trim();
+  return buildEmailShell(
+    'Complete Your Discharge Snapshot Intake Questionnaire',
+    'Discharge Snapshot Intake',
+    body,
+  );
 }
