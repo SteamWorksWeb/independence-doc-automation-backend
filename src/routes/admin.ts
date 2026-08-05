@@ -1359,6 +1359,88 @@ router.delete(
 );
 
 // =============================================================================
+// POST /api/v1/admin/invites/:id/resend
+//
+// Regenerates a fresh invitation token for an existing, un-used invitation
+// and re-dispatches the invite email to the same address.
+//
+// Use-cases:
+//   - The original link expired (7-day TTL passed)
+//   - The recipient never received or lost the original email
+//
+// What it does:
+//   1. Looks up the invitation by its UUID
+//   2. Rejects if the invitation has already been used (isUsed: true)
+//   3. Generates a new 32-byte / 64-char hex token
+//   4. Resets expiresAt to now + 7 days
+//   5. Persists the updated token + expiry
+//   6. Re-sends the invite email with the new link
+//
+// Path param:
+//   :id — the invitation's UUID
+//
+// Responses:
+//   200  { invitation, inviteLink }  — Fresh invite dispatched
+//   400  { error: string }           — Invitation already used/accepted
+//   404  { error: string }           — No invitation found for the given id
+//   401  { error: string }           — Missing or invalid JWT
+//   403  { error: string }           — Valid JWT but role !== 'lawyer'
+//   500  { error: string }           — Global error handler
+// =============================================================================
+
+router.post(
+  '/invites/:id/resend',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma       = getPrisma();
+      const invitationId = String(req.params.id);
+
+      // ── Verify the invitation exists ──────────────────────────────────────
+      const existing = await prisma.invitation.findUnique({
+        where: { id: invitationId },
+      });
+
+      if (!existing) {
+        res.status(404).json({ error: 'Invitation not found.' });
+        return;
+      }
+
+      // ── Reject if already accepted ────────────────────────────────────────
+      if (existing.isUsed) {
+        res.status(400).json({ error: 'This invitation has already been accepted and cannot be resent.' });
+        return;
+      }
+
+      // ── Generate a fresh token + reset 7-day expiry ───────────────────────
+      const token     = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      const updated = await prisma.invitation.update({
+        where: { id: invitationId },
+        data:  { token, expiresAt },
+        select: {
+          id:        true,
+          email:     true,
+          token:     true,
+          expiresAt: true,
+          createdAt: true,
+        },
+      });
+
+      // ── Re-dispatch invite email ──────────────────────────────────────────
+      const inviteLink = `${getFrontendUrl()}/login?token=${token}`;
+      await sendInviteEmail(updated.email, inviteLink);
+
+      console.log(`[admin] 🔁 Invite resent to ${updated.email} (invitation ${invitationId})`);
+
+      res.status(200).json({ invitation: updated, inviteLink });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
 // GET /api/v1/admin/clients/:id/messages
 //
 // Fetches the full conversation thread for a specific client, ordered
