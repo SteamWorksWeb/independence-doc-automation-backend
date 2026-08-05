@@ -933,20 +933,39 @@ router.post(
       const prisma = getPrisma();
 
       const result = await prisma.$transaction(async (tx) => {
-        // Verify the client exists
-        const client = await tx.client.findUnique({
+        // Verify the client exists by clientId from JWT
+        let client = await tx.client.findUnique({
           where:  { id: clientId },
           select: { id: true },
         });
+
+        // ── Fallback: if JWT clientId has no matching row, try email ────────────
+        // This handles stale borrower_session cookies where the original client
+        // was deleted and re-created (e.g. re-invited) with a new UUID.
+        const emailFromBody = typeof body.email === 'string' ? body.email.trim().toLowerCase() : undefined;
+        if (!client && emailFromBody) {
+          console.warn(
+            `[intake/snapshot] clientId ${clientId} not found — falling back to email lookup: ${emailFromBody}`
+          );
+          const byEmail = await tx.client.findFirst({
+            where:  { email: emailFromBody },
+            select: { id: true },
+          });
+          if (byEmail) {
+            client = byEmail;
+          }
+        }
+
         if (!client) return null;
 
+        const resolvedClientId = client.id;
         // Update client identity (name, phone) and mark intake complete
         const nameUpdate: Record<string, string> = {};
         if (firstName && lastName) nameUpdate.name = `${firstName} ${lastName}`;
         else if (firstName)         nameUpdate.name = firstName;
 
         await tx.client.update({
-          where: { id: clientId },
+          where: { id: resolvedClientId },
           data: {
             ...nameUpdate,
             ...(phone ? { phone } : {}),
@@ -957,7 +976,7 @@ router.post(
         // Create the DischargeSnapshot
         const snapshot = await tx.dischargeSnapshot.create({
           data: {
-            clientId,
+            clientId: resolvedClientId,
             ...snapshotData,
             isDischargeable: analysis.isDischargeable,
             status:          analysis.status,
