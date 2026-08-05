@@ -761,6 +761,7 @@ router.post(
                 passwordHash,
                 isVerified:   true,
                 status:       'Pre-Filing',
+                userType:     'LEAD',
                 lawyerId:     invitation.lawyerId,
               },
               select: {

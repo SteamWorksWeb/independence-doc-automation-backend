@@ -209,6 +209,7 @@ router.post(
           passwordHash,
           lawyerId:           lawyerId,
           status:             'Pre-Filing',
+          userType:           'CLIENT',
           verificationToken,
           verificationExpires,
         },

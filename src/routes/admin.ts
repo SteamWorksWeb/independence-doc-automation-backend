@@ -439,12 +439,17 @@ router.get(
       const includeArchived =
         String(req.query.includeArchived ?? '').trim().toLowerCase() === 'true' ||
         archiveFilter === 'all';
-      const where =
+
+      // ── Base where clause: always exclude leads (userType: 'LEAD') ──────────
+      // Only records explicitly promoted to CLIENT appear in the Client Directory.
+      const archiveWhere =
         includeArchived
           ? undefined
           : archiveFilter === 'archived' || archiveFilter === 'true'
           ? { isArchived: true }
           : { isArchived: false };
+
+      const where = { ...archiveWhere, userType: 'CLIENT' };
 
       const clients = await prisma.client.findMany({
         where,
@@ -1986,9 +1991,15 @@ router.get(
 // =============================================================================
 // GET /api/v1/admin/leads
 //
-// Canonical alias for GET /discharge-snapshots. The deployed admin frontend
-// calls the Leads terminology endpoint, while this production branch still uses
-// the DischargeSnapshot Prisma model internally.
+// Returns all intake-flow borrowers who have not yet been promoted to Client
+// (userType === 'LEAD'). These are people who accepted a borrower invite and
+// may or may not have completed the intake questionnaire.
+//
+// Responses:
+//   200  { leads: Lead[] }
+//   401  { error: string }   — Missing or invalid JWT
+//   403  { error: string }   — Valid JWT but role !== 'lawyer'
+//   500  { error: string }   — Global error handler
 // =============================================================================
 
 router.get(
@@ -1997,26 +2008,35 @@ router.get(
     try {
       const prisma = getPrisma();
 
-      const snapshots = await prisma.dischargeSnapshot.findMany({
-        orderBy: { updatedAt: 'desc' },
-        include: {
-          client: {
+      const leads = await prisma.client.findMany({
+        where:   { userType: 'LEAD' },
+        select: {
+          id:           true,
+          name:         true,
+          email:        true,
+          phone:        true,
+          status:       true,
+          intakeStatus: true,
+          createdAt:    true,
+          updatedAt:    true,
+          assignedToId: true,
+          assigneeName: true,
+          intakeProfile: {
             select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              status: true,
-              createdAt: true,
-              intakeProfile: true,
+              isCompleted:  true,
+              dob:          true,
+              phone:        true,
+              householdSize: true,
+              monthlyIncome: true,
             },
           },
         },
+        orderBy: { createdAt: 'desc' },
       });
 
-      console.log(`[admin] GET /leads - Fetched ${snapshots.length} discharge snapshot(s)`);
+      console.log(`[admin] GET /leads - Fetched ${leads.length} lead(s)`);
 
-      res.status(200).json({ snapshots });
+      res.status(200).json({ leads });
     } catch (err) {
       next(err);
     }
@@ -2145,21 +2165,18 @@ router.post(
 // =============================================================================
 // DELETE /api/v1/admin/leads/:id
 //
-// Canonical alias for DELETE /discharge-snapshots/:id, using the Leads
-// terminology introduced during the admin UI overhaul.
-//
-// Permanently removes a DischargeSnapshot (Lead) by its UUID. After the
-// snapshot is deleted, the route checks whether the parent Client record still
-// has any remaining snapshots. If the count is zero the Client is also deleted,
-// cleaning up the orphaned borrower record.
+// Permanently deletes a Lead (Client with userType='LEAD') by their Client UUID.
+// This removes the borrower record and all associated data (intakeProfile,
+// messages, etc.) via Prisma cascade rules.
 //
 // Path param:
-//   :id — the DischargeSnapshot UUID (treated as a "Lead" ID in the frontend)
+//   :id — the Client UUID of the lead
 //
 // Responses:
-//   200  { success: true, message: 'Lead deleted successfully' }
-//   404  { error: string }  — No snapshot found for the given id
-//   401  { error: string }  — Missing or invalid JWT (handled by router.use)
+//   200  { success: true, message: string }
+//   404  { error: string }  — No lead found for the given id
+//   400  { error: string }  — Target is a CLIENT, not a LEAD
+//   401  { error: string }  — Missing or invalid JWT
 //   403  { error: string }  — Valid JWT but role !== 'lawyer'
 //   500  { error: string }  — Global error handler
 // =============================================================================
@@ -2168,44 +2185,31 @@ router.delete(
   '/leads/:id',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const prisma     = getPrisma();
-      const snapshotId = String(req.params.id);
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
 
-      // ── Locate the snapshot to retrieve its parent clientId ─────────────────
-      const snapshot = await prisma.dischargeSnapshot.findUnique({
-        where:  { id: snapshotId },
-        select: { id: true, clientId: true },
+      // ── Locate the lead ──────────────────────────────────────────────────────
+      const lead = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true, userType: true, name: true },
       });
 
-      if (!snapshot) {
+      if (!lead) {
         res.status(404).json({ error: 'Lead not found.' });
         return;
       }
 
-      const { clientId } = snapshot;
-
-      // ── Delete the snapshot ──────────────────────────────────────────────────
-      await prisma.dischargeSnapshot.delete({ where: { id: snapshotId } });
-
-      // ── Delete the parent Client if it has no remaining snapshots ────────────
-      // A client may have been submitted to the wizard multiple times. Only
-      // remove the Client record when this was their last (or only) snapshot.
-      const remainingCount = await prisma.dischargeSnapshot.count({
-        where: { clientId },
-      });
-
-      if (remainingCount === 0) {
-        await prisma.client.delete({ where: { id: clientId } });
-        console.log(
-          `[admin] 🗑️  Lead (snapshot ${snapshotId}) deleted — parent Client ${clientId} also removed (no remaining snapshots).`
-        );
-      } else {
-        console.log(
-          `[admin] 🗑️  Lead (snapshot ${snapshotId}) deleted — Client ${clientId} retained (${remainingCount} snapshot(s) remain).`
-        );
+      if (lead.userType !== 'LEAD') {
+        res.status(400).json({ error: 'Cannot delete a promoted Client via the leads endpoint.' });
+        return;
       }
 
-      res.status(200).json({ success: true, message: 'Lead deleted successfully' });
+      // ── Delete the lead record (cascades to intakeProfile, messages, etc.) ──
+      await prisma.client.delete({ where: { id: clientId } });
+
+      console.log(`[admin] 🗑️  Lead deleted: ${lead.name} (clientId: ${clientId})`);
+
+      res.status(200).json({ success: true, message: 'Lead deleted successfully.' });
     } catch (err) {
       next(err);
     }
@@ -2213,6 +2217,79 @@ router.delete(
 );
 
 // =============================================================================
+// POST /api/v1/admin/leads/:id/promote
+//
+// Promotes a Lead to a full Client. This is the ONLY way to move a borrower
+// from the Lead list to the Client Directory.
+//
+// Sets userType to 'CLIENT' and ensures status is a valid pipeline value.
+// The lawyer can adjust the pipeline status afterward via PATCH /clients/:id/status.
+//
+// Path param:
+//   :id — the Client UUID of the lead to promote
+//
+// Responses:
+//   200  { success: true, client: Client }
+//   400  { error: string }  — Already a CLIENT
+//   404  { error: string }  — No lead found for the given id
+//   401  { error: string }  — Missing or invalid JWT
+//   403  { error: string }  — Valid JWT but role !== 'lawyer'
+//   500  { error: string }  — Global error handler
+// =============================================================================
+
+router.post(
+  '/leads/:id/promote',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const prisma   = getPrisma();
+      const clientId = String(req.params.id);
+
+      // ── Locate the lead ──────────────────────────────────────────────────────
+      const lead = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true, userType: true, name: true, email: true },
+      });
+
+      if (!lead) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+
+      if (lead.userType === 'CLIENT') {
+        res.status(400).json({ error: 'This borrower has already been promoted to a Client.' });
+        return;
+      }
+
+      // ── Promote: set userType CLIENT, ensure pipeline status is valid ────────
+      const promoted = await prisma.client.update({
+        where: { id: clientId },
+        data: {
+          userType: 'CLIENT',
+          status:   'Pre-Filing',
+        },
+        select: {
+          id:           true,
+          name:         true,
+          email:        true,
+          status:       true,
+          intakeStatus: true,
+          userType:     true,
+          createdAt:    true,
+        },
+      });
+
+      console.log(`[admin] ✅ Lead promoted to Client: ${lead.name} (${lead.email}) — clientId: ${clientId}`);
+
+      res.status(200).json({ success: true, client: promoted });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+
+// =============================================================================
+
 // POST /api/v1/admin/discharge-snapshots
 //
 // Creates a DischargeSnapshot linked to an existing or newly-upserted Client.

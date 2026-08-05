@@ -158,6 +158,12 @@ model Client {
   // from the active dashboard roster by default.
   isArchived Boolean @default(false)
 
+  // ── User type ──────────────────────────────────────────────────────────────
+  // Discriminates between invited borrowers (LEAD) and promoted clients (CLIENT).
+  // Set to LEAD when a borrower accepts an intake invitation.
+  // Promoted to CLIENT ONLY by explicit lawyer/admin action.
+  userType String @default("LEAD") // "LEAD" | "CLIENT"
+
   assignedToId String?
   assigneeName String?
 
