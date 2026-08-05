@@ -57,33 +57,33 @@ interface IntakePayload {
   county?:        string;
   phone?:         string;
   address?:       string;
-  householdSize?: number;
+  householdSize?: unknown;
 
   // Health & Employment
-  hasDisability?:   boolean;
-  isEmployed?:      boolean;
-  unemployed5of10?: boolean;
-  monthlyIncome?:   number;
+  hasDisability?:   unknown;
+  isEmployed?:      unknown;
+  unemployed5of10?: unknown;
+  monthlyIncome?:   unknown;
 
   // Assets
   housingStatus?:   string;
-  hasCar?:          boolean;
-  hasRetirement?:   boolean;
-  expectingRefund?: boolean;
+  hasCar?:          unknown;
+  hasRetirement?:   unknown;
+  expectingRefund?: unknown;
 
   // Monthly Expenses
-  expFood?:         number;
-  expHousekeeping?: number;
-  expApparel?:      number;
-  expPersonalCare?: number;
-  expHousing?:      number;
-  expUtilities?:    number;
-  expTransportGas?: number;
-  expCarInsurance?: number;
+  expFood?:         unknown;
+  expHousekeeping?: unknown;
+  expApparel?:      unknown;
+  expPersonalCare?: unknown;
+  expHousing?:      unknown;
+  expUtilities?:    unknown;
+  expTransportGas?: unknown;
+  expCarInsurance?: unknown;
 
   // Education & Debt
-  totalDebt?:       number;
-  studentLoanDebt?: number;
+  totalDebt?:       unknown;
+  studentLoanDebt?: unknown;
   schoolsHistory?:  string;
 
   // Case narrative
@@ -91,7 +91,7 @@ interface IntakePayload {
   unmetBasicNeeds?: string;
 
   // Completion
-  isCompleted?: boolean;
+  isCompleted?: unknown;
 }
 
 interface CompleteIntakePayload {
@@ -129,10 +129,108 @@ const EXPENSE_FIELDS: IrsExpenseKey[] = [
 ];
 
 // ── Helper: strip undefined fields for partial upsert ─────────────────────────
-function definedOnly(payload: IntakePayload): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(payload).filter(([, v]) => v !== undefined)
-  );
+const INTAKE_TEXT_FIELDS = [
+  'dob',
+  'ssn',
+  'county',
+  'phone',
+  'address',
+  'housingStatus',
+  'schoolsHistory',
+  'hardshipNotes',
+  'unmetBasicNeeds',
+] as const;
+
+const INTAKE_NUMBER_FIELDS = [
+  'monthlyIncome',
+  'expFood',
+  'expHousekeeping',
+  'expApparel',
+  'expPersonalCare',
+  'expHousing',
+  'expUtilities',
+  'expTransportGas',
+  'expCarInsurance',
+  'totalDebt',
+  'studentLoanDebt',
+] as const;
+
+const INTAKE_BOOLEAN_FIELDS = [
+  'hasDisability',
+  'isEmployed',
+  'unemployed5of10',
+  'hasCar',
+  'hasRetirement',
+  'expectingRefund',
+] as const;
+
+function parseOptionalNonNegativeNumber(value: unknown): number | undefined | null {
+  if (value === undefined || value === null || value === '') return undefined;
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return undefined;
+
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  return null;
+}
+
+function parseOptionalNonNegativeInt(value: unknown): number | undefined | null {
+  const parsed = parseOptionalNonNegativeNumber(value);
+  if (parsed === undefined || parsed === null) return parsed;
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function buildIntakeProfileData(body: IntakePayload): {
+  data: Record<string, unknown>;
+  errors: string[];
+} {
+  const data: Record<string, unknown> = {};
+  const errors: string[] = [];
+
+  for (const field of INTAKE_TEXT_FIELDS) {
+    if (body[field] !== undefined) {
+      data[field] = typeof body[field] === 'string' ? body[field].trim() : body[field];
+    }
+  }
+
+  const householdSize = parseOptionalNonNegativeInt(body.householdSize);
+  if (householdSize === null) {
+    errors.push('householdSize must be a non-negative integer');
+  } else if (householdSize !== undefined) {
+    data.householdSize = householdSize;
+  }
+
+  for (const field of INTAKE_NUMBER_FIELDS) {
+    const parsed = parseOptionalNonNegativeNumber(body[field]);
+    if (parsed === null) {
+      errors.push(`${field} must be a non-negative number`);
+    } else if (parsed !== undefined) {
+      data[field] = parsed;
+    }
+  }
+
+  for (const field of INTAKE_BOOLEAN_FIELDS) {
+    const parsed = parseOptionalBoolean(body[field]);
+    if (parsed === null && body[field] !== undefined && body[field] !== '') {
+      errors.push(`${field} must be a boolean`);
+    } else if (parsed !== null) {
+      data[field] = parsed;
+    }
+  }
+
+  if (body.isCompleted !== undefined) {
+    data.isCompleted = body.isCompleted === true || body.isCompleted === 'true';
+  }
+
+  return { data, errors };
 }
 
 function parseExpenseAmount(value: unknown): number | null {
@@ -245,37 +343,35 @@ router.post(
     try {
       const clientId = (req as unknown as ClientRequest).clientId;
       const body = req.body as IntakePayload;
+      const { data, errors } = buildIntakeProfileData(body);
 
-      // ── Validate numeric fields ────────────────────────────────────────────
-      const numericFields = [
-        'monthlyIncome', 'expFood', 'expHousekeeping', 'expApparel',
-        'expPersonalCare', 'expHousing', 'expUtilities', 'expTransportGas',
-        'expCarInsurance', 'totalDebt', 'studentLoanDebt',
-      ] as const;
-
-      for (const field of numericFields) {
-        const val = body[field];
-        if (val !== undefined && (typeof val !== 'number' || val < 0)) {
-          res.status(400).json({ error: `${field} must be a non-negative number` });
-          return;
-        }
-      }
-
-      if (
-        body.householdSize !== undefined &&
-        (typeof body.householdSize !== 'number' || body.householdSize < 0)
-      ) {
-        res.status(400).json({ error: 'householdSize must be a non-negative integer' });
+      if (errors.length > 0) {
+        res.status(400).json({ error: errors[0] });
         return;
       }
 
-      // ── Build data payload — only include defined fields ───────────────────
-      const data = definedOnly(body);
-
-      // ── Upsert intake profile ──────────────────────────────────────────────
+      // ── Verify the client exists before attempting the upsert ─────────────
+      // If the JWT is valid but references a client that no longer exists in the
+      // DB (e.g. account was deleted), the upsert will throw a FK violation
+      // (PrismaClientKnownRequestError P2003) which produces an opaque 500.
+      // Return a 404 with a clear message instead.
       const prisma = getPrisma();
 
-      if (body.isCompleted === true) {
+      const clientExists = await prisma.client.findUnique({
+        where:  { id: clientId },
+        select: { id: true },
+      });
+
+      if (!clientExists) {
+        console.warn(`[intake] POST /: clientId ${clientId} not found — JWT may reference a deleted account`);
+        res.status(404).json({
+          error: 'Your account could not be found. Please contact your legal team for a new invitation.',
+        });
+        return;
+      }
+
+      // ── Upsert intake profile ──────────────────────────────────────────────
+      if (data.isCompleted === true) {
         const [existingProfile, client] = await Promise.all([
           prisma.intakeProfile.findUnique({ where: { clientId } }),
           prisma.client.findUnique({
@@ -300,13 +396,34 @@ router.post(
         update: data,
       });
 
+      if (typeof data.phone === 'string') {
+        await prisma.client.update({
+          where: { id: clientId },
+          data:  { phone: data.phone },
+        });
+      }
+
       res.status(200).json({ intakeProfile });
 
     } catch (err) {
+      // ── Surface Prisma validation errors as 400 ───────────────────────────
+      const errName = (err as Error)?.constructor?.name ?? '';
+      if (
+        errName === 'PrismaClientValidationError' ||
+        errName === 'PrismaClientKnownRequestError'
+      ) {
+        console.error('[intake] POST /: Prisma error:', err);
+        res.status(400).json({
+          error: 'Unable to save intake data. Please check your entries and try again.',
+          detail: (err as Error).message,
+        });
+        return;
+      }
       next(err);
     }
   }
 );
+
 
 // =============================================================================
 // POST /api/v1/intake/complete
@@ -662,7 +779,8 @@ interface SnapshotPayload {
   hasFederalLoans?: string; // "Yes" | "No" | "I don't know"  → normalised below
 
   // Step 3 — balance & household
-  outstandingBalance?: unknown; // maps to principalBalance
+  principalBalance?:   unknown;
+  outstandingBalance?: unknown; // legacy alias for principalBalance
   householdSize?:      unknown; // number
 
   // Step 4 — income
@@ -670,22 +788,30 @@ interface SnapshotPayload {
   monthlyTakeHomePay?: unknown;
 
   // Step 5 — expenses
-  additionalMonthlyIncome?: unknown; // maps to additionalIncome
+  additionalIncome?:        unknown;
+  additionalMonthlyIncome?: unknown; // legacy alias for additionalIncome
   housingExpenses?:         unknown;
   transportationExpenses?:  unknown;
   dependentCareExpenses?:   unknown;
 
   // Step 6 — employment & health
-  currentlyEmployed?:  unknown; // maps to isEmployed
-  workInFieldOfStudy?: unknown;
-  unemployed5Years?:   unknown; // maps to unemployed5PlusYears
-  hasDisability?:      unknown;
+  isEmployed?:             unknown;
+  currentlyEmployed?:      unknown; // legacy alias for isEmployed
+  workInFieldOfStudy?:     unknown;
+  unemployed5PlusYears?:   unknown;
+  unemployed5Years?:       unknown; // legacy alias for unemployed5PlusYears
+  hasDisability?:          unknown;
 
   // Step 7 — education & age
   didGraduate?:        unknown;
   schoolClosed?:       unknown;
   lastAttendedSchool?: unknown; // date string
   is65OrOlder?:        unknown;
+
+  // Good faith flags
+  appliedForIDR?:      unknown;
+  madePriorPayments?:  unknown;
+  contactedServicer?:  unknown;
 }
 
 /** Normalise the hasFederalLoans block-button value to the DB enum string */
@@ -695,6 +821,10 @@ function normaliseFederalLoans(raw: string | undefined): 'yes' | 'no' | 'unsure'
   if (lower === 'yes') return 'yes';
   if (lower === 'no')  return 'no';
   return 'unsure'; // "I don't know" or anything else
+}
+
+function firstDefined<T>(...values: T[]): T | undefined {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
 }
 
 router.post(
@@ -713,11 +843,11 @@ router.post(
       const hasFederalLoans = normaliseFederalLoans(body.hasFederalLoans);
 
       // ── 2. Parse numeric fields ────────────────────────────────────────────
-      const principalBalance     = parseExpenseAmount(body.outstandingBalance);
+      const principalBalance     = parseExpenseAmount(firstDefined(body.principalBalance, body.outstandingBalance));
       const householdSizeRaw     = parseExpenseAmount(body.householdSize);
       const monthlyGrossIncome   = parseExpenseAmount(body.monthlyGrossIncome);
       const monthlyTakeHomePay   = parseExpenseAmount(body.monthlyTakeHomePay);
-      const additionalIncome     = parseExpenseAmount(body.additionalMonthlyIncome);
+      const additionalIncome     = parseExpenseAmount(firstDefined(body.additionalIncome, body.additionalMonthlyIncome));
       const housingExpenses      = parseExpenseAmount(body.housingExpenses);
       const transportationExpenses = parseExpenseAmount(body.transportationExpenses);
       const dependentCareExpenses  = parseExpenseAmount(body.dependentCareExpenses);
@@ -727,13 +857,16 @@ router.post(
         householdSizeRaw !== null ? Math.round(householdSizeRaw) : null;
 
       // ── 3. Parse boolean fields ────────────────────────────────────────────
-      const isEmployed          = parseOptionalBoolean(body.currentlyEmployed);
+      const isEmployed          = parseOptionalBoolean(firstDefined(body.isEmployed, body.currentlyEmployed));
       const workInFieldOfStudy  = parseOptionalBoolean(body.workInFieldOfStudy);
-      const unemployed5PlusYears = parseOptionalBoolean(body.unemployed5Years);
+      const unemployed5PlusYears = parseOptionalBoolean(firstDefined(body.unemployed5PlusYears, body.unemployed5Years));
       const hasDisability       = parseOptionalBoolean(body.hasDisability);
       const didGraduate         = parseOptionalBoolean(body.didGraduate);
       const schoolClosed        = parseOptionalBoolean(body.schoolClosed);
       const is65OrOlder         = parseOptionalBoolean(body.is65OrOlder);
+      const appliedForIDR       = parseOptionalBoolean(body.appliedForIDR);
+      const madePriorPayments   = parseOptionalBoolean(body.madePriorPayments);
+      const contactedServicer   = parseOptionalBoolean(body.contactedServicer);
 
       // ── 4. Parse date field ────────────────────────────────────────────────
       const lastAttendedSchool = parseOptionalDate(body.lastAttendedSchool);
@@ -762,6 +895,9 @@ router.post(
         ...(schoolClosed          !== null ? { schoolClosed }          : {}),
         ...(is65OrOlder           !== null ? { is65OrOlder }           : {}),
         ...(lastAttendedSchool              ? { lastAttendedSchool }    : {}),
+        ...(appliedForIDR         !== null ? { appliedForIDR }         : {}),
+        ...(madePriorPayments     !== null ? { madePriorPayments }     : {}),
+        ...(contactedServicer     !== null ? { contactedServicer }     : {}),
       };
 
       // ── 7. Run discharge probability engine ───────────────────────────────
@@ -787,9 +923,9 @@ router.post(
         militaryStartDate:      null,
         militaryEndDate:        null,
         dischargeCharacterization: null,
-        appliedForIDR:          false,
-        madePriorPayments:      false,
-        contactedServicer:      false,
+        appliedForIDR:          appliedForIDR ?? false,
+        madePriorPayments:      madePriorPayments ?? false,
+        contactedServicer:      contactedServicer ?? false,
         isDischargeable:        null,
       } as DischargeSnapshot);
 
@@ -845,4 +981,3 @@ router.post(
 );
 
 export default router;
-
