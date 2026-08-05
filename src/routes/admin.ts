@@ -1203,6 +1203,18 @@ router.post(
 
       const normalizedEmail = email.trim().toLowerCase();
 
+      const prisma     = getPrisma();
+
+      // ── Reject if a client with this email already exists ─────────────────
+      const existingClient = await prisma.client.findFirst({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      if (existingClient) {
+        res.status(400).json({ error: 'A client with this email already exists.' });
+        return;
+      }
+
       // ── Generate secure token ─────────────────────────────────────────────
       //   32 bytes → 64-char hex string → 256 bits of entropy.
       //   Stored directly in the DB (not hashed) because the token is
@@ -1214,7 +1226,6 @@ router.post(
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
       // ── Persist invitation ────────────────────────────────────────────────
-      const prisma     = getPrisma();
       const invitation = await prisma.invitation.create({
         data: {
           email:    normalizedEmail,
@@ -1966,6 +1977,18 @@ router.post(
 
       const normalizedEmail = email.trim().toLowerCase();
 
+      const prisma     = getPrisma();
+
+      // ── Reject if a client with this email already exists ─────────────────
+      const existingClient = await prisma.client.findFirst({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      if (existingClient) {
+        res.status(400).json({ error: 'A client with this email already exists.' });
+        return;
+      }
+
       // ── Generate secure token ─────────────────────────────────────────────
       //   32 bytes → 64-char hex string → 256 bits of entropy.
       const token = crypto.randomBytes(32).toString('hex');
@@ -1974,7 +1997,6 @@ router.post(
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
       // ── Persist invitation ────────────────────────────────────────────────
-      const prisma     = getPrisma();
       const invitation = await prisma.invitation.create({
         data: {
           email:    normalizedEmail,
@@ -2430,6 +2452,18 @@ router.post(
 
       const normalizedEmail = email.trim().toLowerCase();
 
+      const prisma      = getPrisma();
+
+      // ── Reject if a client with this email already exists ─────────────────
+      const existingClient = await prisma.client.findFirst({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      if (existingClient) {
+        res.status(400).json({ error: 'A client with this email already exists.' });
+        return;
+      }
+
       // ── Generate secure token ─────────────────────────────────────────────
       //   32 bytes → 64-char hex string → 256 bits of entropy.
       //   Stored directly in the DB (not hashed) because the token is
@@ -2441,7 +2475,6 @@ router.post(
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
       // ── Persist invitation ────────────────────────────────────────────────
-      const prisma      = getPrisma();
       const invitation  = await prisma.invitation.create({
         data: {
           email:    normalizedEmail,

@@ -113,7 +113,6 @@ router.post(
 
       // ── Field presence validation ──────────────────────────────────────────
       const missing: string[] = [];
-      if (!name?.trim())     missing.push('name');
       if (!email?.trim())    missing.push('email');
       if (!password)         missing.push('password');
       if (!token?.trim())    missing.push('token');
@@ -197,9 +196,15 @@ router.post(
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24h
 
       // ── Step 3: Persist via Prisma ─────────────────────────────────────────
+      const clientName = name?.trim() || (email as string)
+        .split('@')[0]
+        .replace(/[._-]/g, ' ')
+        .replace(/\b\w/g, (c: string) => c.toUpperCase())
+        .trim() || (email as string);
+
       const client = await prisma.client.create({
         data: {
-          name:               (name as string).trim(),
+          name:               clientName,
           email:              normalizedEmail,
           passwordHash,
           lawyerId:           lawyerId,
