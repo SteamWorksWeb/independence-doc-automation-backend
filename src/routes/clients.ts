@@ -209,7 +209,7 @@ router.post(
           passwordHash,
           lawyerId:           lawyerId,
           status:             'Pre-Filing',
-          userType:           'CLIENT',
+          userType:           'LEAD',
           verificationToken,
           verificationExpires,
         },
@@ -393,6 +393,7 @@ router.post(
           lawyerId:     true,
           passwordHash: true,
           isVerified:   true,
+          userType:     true,
         },
       });
 
@@ -440,6 +441,7 @@ router.post(
           name:     client.name,
           email:    client.email,
           lawyerId: client.lawyerId,
+          userType: client.userType,
         },
       });
 
