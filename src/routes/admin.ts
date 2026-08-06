@@ -1020,18 +1020,36 @@ router.patch(
         orderBy: { createdAt: 'desc' },
       });
 
+      // ── Upsert: create a new snapshot if one doesn't exist yet ────────────
+      // Leads who accepted an invite but haven't completed the discharge wizard
+      // will not have a DischargeSnapshot row. The admin edit page still needs
+      // to save, so we create the initial snapshot on first save.
+      let rawUpdatedSnapshot: DischargeSnapshot;
       if (!latestSnapshot) {
-        res.status(404).json({ error: 'Discharge snapshot not found.' });
-        return;
+        // hasFederalLoans is a required non-nullable String in the schema.
+        // Default to 'unsure' when the admin hasn't explicitly set it yet.
+        const createData = {
+          clientId,
+          hasFederalLoans: (snapshotData as Record<string, unknown>).hasFederalLoans
+            ? String((snapshotData as Record<string, unknown>).hasFederalLoans)
+            : 'unsure',
+          ...snapshotData,
+        };
+        rawUpdatedSnapshot = await prisma.dischargeSnapshot.create({
+          data: createData,
+        });
+        console.log(`[admin] DischargeSnapshot ${rawUpdatedSnapshot.id} created for client ${clientId}`);
+      } else {
+        // Apply the editable fields first, then recompute isDischargeable/status
+        // from the freshly-saved snapshot so the probability engine always has a
+        // consistent view of the record.
+        rawUpdatedSnapshot = await prisma.dischargeSnapshot.update({
+          where: { id: latestSnapshot.id },
+          data:  snapshotData,
+        });
+        console.log(`[admin] DischargeSnapshot ${latestSnapshot.id} updated for client ${clientId}`);
       }
 
-      // Apply the editable fields first, then recompute isDischargeable/status
-      // from the freshly-saved snapshot so the probability engine always has a
-      // consistent view of the record.
-      const rawUpdatedSnapshot = await prisma.dischargeSnapshot.update({
-        where: { id: latestSnapshot.id },
-        data:  snapshotData,
-      });
       const analysis = calculateDischargeProbability(rawUpdatedSnapshot);
 
       // Allow the caller to hard-override isDischargeable/status; fall back to
@@ -1042,14 +1060,12 @@ router.patch(
         : undefined;
 
       const updatedSnapshot = await prisma.dischargeSnapshot.update({
-        where: { id: latestSnapshot.id },
+        where: { id: rawUpdatedSnapshot.id },
         data: {
           isDischargeable: overrideIsDischargeable !== undefined ? overrideIsDischargeable : analysis.isDischargeable,
           status:          overrideStatus          !== undefined ? overrideStatus          : analysis.status,
         },
       });
-
-      console.log(`[admin] DischargeSnapshot ${latestSnapshot.id} updated for client ${clientId}`);
 
       res.status(200).json({ snapshot: updatedSnapshot });
     } catch (err) {
