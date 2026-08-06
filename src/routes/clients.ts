@@ -210,8 +210,11 @@ router.post(
           lawyerId:           lawyerId,
           status:             'Pre-Filing',
           userType:           'LEAD',
-          verificationToken,
-          verificationExpires,
+          // Invite-token registrations are pre-verified — the lawyer confirmed
+          // the email by sending the invite. Skip the magic-link step entirely.
+          isVerified:         true,
+          verificationToken:  null,
+          verificationExpires: null,
         },
         // Return only safe, non-sensitive fields
         select: {
@@ -229,19 +232,12 @@ router.post(
         data:  { isUsed: true },
       });
 
-      // ── Step 5: Send verification email ───────────────────────────────────
+      // ── Step 5: Skip verification email for invite-token registrations ────
       //
-      //   We pass rawToken (not the hash) — the email utility embeds it in
-      //   the magic-link URL for the client to click.
-      //   Fire-and-forget pattern: email failure is logged but does NOT roll
-      //   back the record — the lawyer can trigger a resend later.
+      //   The invite itself proves email ownership (lawyer sent it to a specific
+      //   address). Sending a verification email would be confusing and redundant.
       //
-      try {
-        await sendVerificationEmail(client.email, rawToken);
-      } catch (emailErr) {
-        console.error('[clients] Verification email failed (client created):', emailErr);
-        // Continue — return 201, surface email failure via server logs
-      }
+      console.log(`[clients] Invite-token registration — skipping verification email for ${client.email}`);
 
       // ── Step 6: Return created client (safe fields only) ──────────────────
       res.status(201).json(client);
