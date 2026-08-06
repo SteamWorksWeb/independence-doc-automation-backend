@@ -50,6 +50,7 @@ for (const key of REQUIRED_ENV) {
 const PORT = parseInt(process.env.PORT as string, 10);
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://apply.theindependencelaw.com',
+  'http://localhost:3000', // local Next.js dev server
 ];
 
 function normalizeAllowedOrigin(rawOrigin: string): string | null {

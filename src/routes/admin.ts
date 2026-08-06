@@ -1278,7 +1278,7 @@ router.post(
       });
 
       // ── Build invite link and dispatch email via Resend ───────────────────────────
-      const inviteLink = `${getFrontendUrl()}/login?token=${token}`;
+      const inviteLink = `${getFrontendUrl()}/register?token=${token}`;
 
       await sendInviteEmail(normalizedEmail, inviteLink);
 
@@ -1463,7 +1463,7 @@ router.post(
       });
 
       // ── Re-dispatch invite email ──────────────────────────────────────────
-      const inviteLink = `${getFrontendUrl()}/login?token=${token}`;
+      const inviteLink = `${getFrontendUrl()}/register?token=${token}`;
       await sendInviteEmail(updated.email, inviteLink);
 
       console.log(`[admin] 🔁 Invite resent to ${updated.email} (invitation ${invitationId})`);
@@ -2157,9 +2157,9 @@ router.post(
         },
       });
 
-      // ── Build intake link ─────────────────────────────────────────────────
+      // ── Build registration link ───────────────────────────────────────────
       const frontendUrl = getFrontendUrl();
-      const intakeLink  = `${frontendUrl}/intake?token=${token}`;
+      const intakeLink  = `${frontendUrl}/register?token=${token}`;
 
       // ── Dispatch borrower-specific email via Resend ───────────────────────
       await sendBorrowerInviteEmail(normalizedEmail, intakeLink);
@@ -2615,8 +2615,8 @@ router.post(
 //        Body: Never uses the word "Client" — addresses the recipient as a borrower
 //   5. Returns the invitation record in the response
 //
-// The invite link routes to /intake?token=<token> so the borrower lands directly
-// in the intake setup flow before setting their password.
+// The invite link routes to /register?token=<token> so the borrower lands directly
+// on the registration page to set their password before intake.
 //
 // Request body (JSON):
 //   {
@@ -2704,10 +2704,10 @@ router.post(
         },
       });
 
-      // ── Build borrower invite link ────────────────────────────────────────
-      //   Sends the borrower directly into the intake setup flow.
+      // ── Build borrower registration link ──────────────────────────────────
+      //   Sends the borrower directly to the registration page to set their password.
       const frontendUrl  = getFrontendUrl();
-      const intakeLink   = `${frontendUrl}/intake?token=${token}`;
+      const intakeLink   = `${frontendUrl}/register?token=${token}`;
 
       // ── Dispatch borrower-specific email via Resend ───────────────────────
       //   Uses sendBorrowerInviteEmail — entirely separate from sendInviteEmail.
